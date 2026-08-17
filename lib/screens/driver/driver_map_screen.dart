@@ -1,10 +1,12 @@
-import 'package:flutter/material.dart';
 import 'dart:async';
+
+import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:geolocator/geolocator.dart';
 import '../../screens/chat/chat_screen.dart';
 import '../../widgets/rating_dialog.dart';
+import '../../widgets/driver_location_marker_layer.dart';
+import '../../widgets/app_drawer.dart';
 import '../../services/route_service.dart'; // Переиспользуем сервис
 import '../../services/order_workflow_service.dart';
 import '../../services/driver_tracking_service.dart';
@@ -13,7 +15,11 @@ class DriverMapScreen extends StatefulWidget {
   final String orderId;
   final Map<String, dynamic> orderData;
 
-  const DriverMapScreen({super.key, required this.orderId, required this.orderData});
+  const DriverMapScreen({
+    super.key,
+    required this.orderId,
+    required this.orderData,
+  });
 
   @override
   State<DriverMapScreen> createState() => _DriverMapScreenState();
@@ -21,25 +27,17 @@ class DriverMapScreen extends StatefulWidget {
 
 class _DriverMapScreenState extends State<DriverMapScreen> {
   final MapController _mapController = MapController();
-  LatLng? _driverLocation;
   List<LatLng> _routePoints = [];
   final DriverTrackingService _tracking = DriverTrackingService();
   String? _trackingMessage;
-  StreamSubscription<Position>? _mapPositionSubscription;
+  bool _hasCenteredMap = false;
+  bool _hasRequestedRoute = false;
 
   @override
   void initState() {
     super.initState();
-    _trackDriverAndBuildRoute();
+    _tracking.positionListenable.addListener(_handleDriverPosition);
     _startTracking();
-    _mapPositionSubscription = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 5,
-      ),
-    ).listen((position) {
-      if (mounted) setState(() => _driverLocation = LatLng(position.latitude, position.longitude));
-    }, onError: (_) {});
   }
 
   Future<void> _startTracking() async {
@@ -51,25 +49,39 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
 
   @override
   void dispose() {
-    _mapPositionSubscription?.cancel();
-    _tracking.stopLocationUpdates(widget.orderId);
+    _tracking.positionListenable.removeListener(_handleDriverPosition);
+    unawaited(_tracking.dispose(widget.orderId));
     super.dispose();
   }
 
-  Future<void> _trackDriverAndBuildRoute() async {
-    try {
-      Position pos = await Geolocator.getCurrentPosition();
-      LatLng driverPos = LatLng(pos.latitude, pos.longitude);
-      LatLng passengerFrom = LatLng(widget.orderData['fromLat'], widget.orderData['fromLng']);
+  void _handleDriverPosition() {
+    final driverPosition = _tracking.latestPosition;
+    if (driverPosition == null) return;
 
-      if (!mounted) return;
-      setState(() => _driverLocation = driverPos);
-      _mapController.move(driverPos, 14.0);
+    if (!_hasCenteredMap) {
+      _hasCenteredMap = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _mapController.move(driverPosition, 14.0);
+      });
+    }
+
+    if (!_hasRequestedRoute) {
+      _hasRequestedRoute = true;
+      _buildRouteFrom(driverPosition);
+    }
+  }
+
+  Future<void> _buildRouteFrom(LatLng driverPosition) async {
+    try {
+      LatLng passengerFrom = LatLng(
+        widget.orderData['fromLat'],
+        widget.orderData['fromLng'],
+      );
 
       // Исправлено: получение геометрии через единый RouteService
       final points = await RouteService.fetchRouteGeometry(
-        startLat: driverPos.latitude,
-        startLng: driverPos.longitude,
+        startLat: driverPosition.latitude,
+        startLng: driverPosition.longitude,
         destLat: passengerFrom.latitude,
         destLng: passengerFrom.longitude,
       );
@@ -99,7 +111,9 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
       );
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
       }
       return;
     }
@@ -128,33 +142,74 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
       'arrived': 'Начать поездку',
       'in_progress': 'Завершить поездку',
     }[status];
-    LatLng passengerFrom = LatLng(widget.orderData['fromLat'], widget.orderData['fromLng']);
-    LatLng passengerTo = LatLng(widget.orderData['toLat'], widget.orderData['toLng']);
+    LatLng passengerFrom = LatLng(
+      widget.orderData['fromLat'],
+      widget.orderData['fromLng'],
+    );
+    LatLng passengerTo = LatLng(
+      widget.orderData['toLat'],
+      widget.orderData['toLng'],
+    );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Выполнение заказа'), backgroundColor: Colors.green),
+      appBar: AppBar(
+        title: const Text('Выполнение заказа'),
+        backgroundColor: Colors.green,
+      ),
+      drawer: const AppDrawer(mode: AppMode.driver),
       body: Stack(
         children: [
           FlutterMap(
             mapController: _mapController,
-            options: MapOptions(initialCenter: passengerFrom, initialZoom: 14.0),
+            options: MapOptions(
+              initialCenter: passengerFrom,
+              initialZoom: 14.0,
+            ),
             children: [
               TileLayer(
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.example.esil_taxi',
               ),
               if (_routePoints.isNotEmpty)
-                PolylineLayer(polylines: [Polyline(points: _routePoints, color: Colors.green, strokeWidth: 5)]),
-              MarkerLayer(markers: [
-                if (_driverLocation != null)
-                  Marker(point: _driverLocation!, child: const Icon(Icons.navigation, color: Colors.blue, size: 40)),
-                Marker(point: passengerFrom, child: const Icon(Icons.person_pin_circle, color: Colors.green, size: 45)),
-                Marker(point: passengerTo, child: const Icon(Icons.flag, color: Colors.red, size: 40)),
-              ]),
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _routePoints,
+                      color: Colors.green,
+                      strokeWidth: 5,
+                    ),
+                  ],
+                ),
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: passengerFrom,
+                    child: const Icon(
+                      Icons.person_pin_circle,
+                      color: Colors.green,
+                      size: 45,
+                    ),
+                  ),
+                  Marker(
+                    point: passengerTo,
+                    child: const Icon(Icons.flag, color: Colors.red, size: 40),
+                  ),
+                ],
+              ),
+              DriverLocationMarkerLayer(
+                positionListenable: _tracking.positionListenable,
+                marker: const Icon(
+                  Icons.navigation,
+                  color: Colors.blue,
+                  size: 40,
+                ),
+              ),
             ],
           ),
           Positioned(
-            bottom: 20, left: 15, right: 15,
+            bottom: 20,
+            left: 15,
+            right: 15,
             child: Card(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -166,7 +221,10 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
                         _trackingMessage!,
                         style: const TextStyle(color: Colors.orangeAccent),
                       ),
-                    Text('Клиент ожидает: ${widget.orderData['fromAddress']}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                    Text(
+                      'Клиент ожидает: ${widget.orderData['fromAddress']}',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     const SizedBox(height: 10),
                     Row(
                       children: [
@@ -176,7 +234,12 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
                             label: const Text('Чат'),
                             onPressed: () => Navigator.push(
                               context,
-                              MaterialPageRoute(builder: (_) => ChatScreen(orderId: widget.orderId, peerName: 'Пассажир')),
+                              MaterialPageRoute(
+                                builder: (_) => ChatScreen(
+                                  orderId: widget.orderId,
+                                  peerName: 'Пассажир',
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -195,12 +258,12 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
                             ),
                           ),
                       ],
-                    )
+                    ),
                   ],
                 ),
               ),
             ),
-          )
+          ),
         ],
       ),
     );

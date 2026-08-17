@@ -3,23 +3,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 import '/models/city.dart';
 import '/models/address_suggestion.dart';
 import '/services/city_service.dart';
-import '/services/auth_service.dart';
+import '/services/order_creation_service.dart';
 import '/services/route_service.dart';
 import '/services/geocoding_service.dart';
+import '/widgets/app_drawer.dart';
 import '/widgets/city_selection_modal.dart';
-import '../profile/history_screen.dart';
-import '../profile/profile_screen.dart';
-import '../driver/driver_subscription_screen.dart';
+import '/widgets/order_creation_error_snackbar.dart';
 import 'order_tracking_screen.dart';
-import '../auth/login_screen.dart';
 
 class MapScreen extends StatefulWidget {
-  const MapScreen({super.key});
+  const MapScreen({super.key, this.orderCreationService});
+
+  final OrderCreationService? orderCreationService;
 
   @override
   State<MapScreen> createState() => _MapScreenState();
@@ -27,13 +26,14 @@ class MapScreen extends StatefulWidget {
 
 class _MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
-  final AuthService _authService = AuthService();
+  late final OrderCreationService _orderCreationService;
 
   final FocusNode _fromFocusNode = FocusNode();
   final FocusNode _toFocusNode = FocusNode();
 
   City _selectedCity = availableCities.first;
-  LatLng _mapCenter = const LatLng(51.169392, 71.449074);
+  LatLng _mapCenter = availableCities.first.center;
+  double _mapZoom = availableCities.first.mapZoom;
 
   LatLng? _fromPoint;
   LatLng? _toPoint;
@@ -41,7 +41,9 @@ class _MapScreenState extends State<MapScreen> {
 
   final TextEditingController _fromAddressController = TextEditingController();
   final TextEditingController _toAddressController = TextEditingController();
-  final TextEditingController _priceController = TextEditingController(text: '500');
+  final TextEditingController _priceController = TextEditingController(
+    text: '500',
+  );
 
   List<AddressSuggestion> _fromSuggestions = [];
   List<AddressSuggestion> _toSuggestions = [];
@@ -51,15 +53,15 @@ class _MapScreenState extends State<MapScreen> {
   bool _isSelectingFrom = true;
   bool _isLoadingRoute = false;
   bool _isCreatingOrder = false;
-  bool _isDriverMode = false;
 
   @override
   void initState() {
     super.initState();
+    _orderCreationService =
+        widget.orderCreationService ?? OrderCreationService();
     _fromFocusNode.addListener(_selectFromPoint);
     _toFocusNode.addListener(_selectToPoint);
     _loadSavedCity();
-    _determinePosition();
   }
 
   @override
@@ -78,11 +80,23 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _loadSavedCity() async {
     final cityId = await CityService.getSelectedCity();
+    if (!mounted) return;
+
+    final savedCity = availableCities.firstWhere(
+      (city) => city.id == cityId,
+      orElse: () => availableCities.first,
+    );
+
     setState(() {
-      _selectedCity = availableCities.firstWhere(
-        (c) => c.id == cityId,
-        orElse: () => availableCities.first,
-      );
+      _selectedCity = savedCity;
+      _mapCenter = savedCity.center;
+      _mapZoom = savedCity.mapZoom;
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _mapController.move(savedCity.center, savedCity.mapZoom);
+      }
     });
   }
 
@@ -103,6 +117,7 @@ class _MapScreenState extends State<MapScreen> {
     if (mounted) {
       setState(() {
         _mapCenter = userPos;
+        _mapZoom = 15.0;
       });
       _mapController.move(userPos, 15.0);
     }
@@ -120,43 +135,29 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  void _openCitySelector() {
-    showCitySelectionModal(
+  Future<void> _openCitySelector() async {
+    final newCity = await showCitySelectionModal(
       context,
       currentCityId: _selectedCity.id,
-      onCityChanged: (newCity) {
-        setState(() {
-          _selectedCity = newCity;
-          _fromPoint = null;
-          _toPoint = null;
-          _routePoints.clear();
-          _fromAddressController.clear();
-          _toAddressController.clear();
-          _fromSuggestions.clear();
-          _toSuggestions.clear();
-        });
-      },
     );
-  }
+    if (newCity == null) return;
 
-  Future<void> _toggleDriverMode(bool value) async {
+    await CityService.setSelectedCity(newCity.id);
+    if (!mounted) return;
+
     setState(() {
-      _isDriverMode = value;
+      _selectedCity = newCity;
+      _mapCenter = newCity.center;
+      _mapZoom = newCity.mapZoom;
+      _fromPoint = null;
+      _toPoint = null;
+      _routePoints.clear();
+      _fromAddressController.clear();
+      _toAddressController.clear();
+      _fromSuggestions.clear();
+      _toSuggestions.clear();
     });
-
-    if (value) {
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => const DriverSubscriptionScreen(),
-        ),
-      );
-      if (mounted) {
-        setState(() {
-          _isDriverMode = false;
-        });
-      }
-    }
+    _mapController.move(newCity.center, newCity.mapZoom);
   }
 
   void _onMapTap(TapPosition tapPos, LatLng point) async {
@@ -232,59 +233,68 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Future<void> _submitOrder() async {
+    if (_isCreatingOrder) return;
+
     if (_fromPoint == null || _toPoint == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Укажите точки A и B на карте или выберите из списка')),
+        const SnackBar(
+          content: Text('Укажите точки A и B на карте или выберите из списка'),
+        ),
       );
       return;
     }
 
-    final priceInt = int.tryParse(_priceController.text.replaceAll(RegExp(r'\D'), '')) ?? 500;
+    final priceInt =
+        int.tryParse(_priceController.text.replaceAll(RegExp(r'\D'), '')) ??
+        500;
 
     setState(() => _isCreatingOrder = true);
-    String? orderId;
+    late final String orderId;
 
     try {
-      orderId = await _authService
+      orderId = await _orderCreationService
           .createOrder(
-            fromAddress: _fromAddressController.text.isEmpty ? 'Точка A' : _fromAddressController.text,
-            toAddress: _toAddressController.text.isEmpty ? 'Точка B' : _toAddressController.text,
+            fromAddress: _fromAddressController.text.isEmpty
+                ? 'Точка A'
+                : _fromAddressController.text,
+            toAddress: _toAddressController.text.isEmpty
+                ? 'Точка B'
+                : _toAddressController.text,
             price: priceInt,
             fromPoint: _fromPoint!,
             toPoint: _toPoint!,
+            cityId: _selectedCity.id,
           )
           .timeout(const Duration(seconds: 15));
-    } on TimeoutException {
+    } on TimeoutException catch (error, stackTrace) {
+      debugPrint('[OrderCreation] timeout: $error');
+      debugPrintStack(stackTrace: stackTrace);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Нет ответа от сервера. Попробуйте ещё раз.')),
+          const SnackBar(
+            content: Text('Нет ответа от сервера. Попробуйте ещё раз.'),
+          ),
         );
       }
       return;
-    } catch (error) {
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[OrderCreation] UI failure type=${error.runtimeType} error=$error',
+      );
+      debugPrintStack(stackTrace: stackTrace);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Не удалось создать заказ: $error')),
-        );
+        showOrderCreationError(context, error);
       }
       return;
     } finally {
       if (mounted) setState(() => _isCreatingOrder = false);
     }
 
-    final createdOrderId = orderId;
-    if (createdOrderId != null && mounted) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => OrderTrackingScreen(orderId: createdOrderId),
-        ),
-      );
-    } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Не удалось создать заказ. Попробуйте еще раз.')),
-      );
-    }
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => OrderTrackingScreen(orderId: orderId)),
+    );
   }
 
   @override
@@ -303,7 +313,10 @@ class _MapScreenState extends State<MapScreen> {
                 const SizedBox(width: 6),
                 Text(
                   _selectedCity.name,
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 const Icon(Icons.arrow_drop_down),
               ],
@@ -311,98 +324,15 @@ class _MapScreenState extends State<MapScreen> {
           ),
         ),
         centerTitle: true,
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 8.0),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.local_taxi,
-                  color: _isDriverMode ? Colors.amber : Colors.grey,
-                  size: 22,
-                ),
-                Switch(
-                  value: _isDriverMode,
-                  activeColor: Colors.amber,
-                  onChanged: _toggleDriverMode,
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
-      drawer: Drawer(
-        child: ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            UserAccountsDrawerHeader(
-              accountName: Text(_isDriverMode ? 'Водитель' : 'Пассажир'),
-              accountEmail: Text(FirebaseAuth.instance.currentUser?.email ?? ''),
-              currentAccountPicture: const CircleAvatar(
-                backgroundColor: Colors.amber,
-                child: Icon(Icons.person, color: Colors.black, size: 40),
-              ),
-              decoration: const BoxDecoration(color: Colors.black87),
-            ),
-            SwitchListTile(
-              title: const Text(
-                'Режим водителя',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              subtitle: Text(_isDriverMode ? 'Включен' : 'Выключен'),
-              secondary: Icon(
-                Icons.local_taxi,
-                color: _isDriverMode ? Colors.amber : Colors.grey,
-              ),
-              value: _isDriverMode,
-              activeColor: Colors.amber,
-              onChanged: (bool value) {
-                Navigator.pop(context);
-                _toggleDriverMode(value);
-              },
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.history),
-              title: const Text('История заказов'),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryScreen()));
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.person),
-              title: const Text('Настройки профиля'),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
-              },
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.exit_to_app, color: Colors.red),
-              title: const Text('Выйти', style: TextStyle(color: Colors.red)),
-              onTap: () async {
-                await FirebaseAuth.instance.signOut();
-                if (context.mounted) {
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(builder: (_) => const LoginScreen()),
-                    (route) => false,
-                  );
-                }
-              },
-            ),
-          ],
-        ),
-      ),
+      drawer: const AppDrawer(mode: AppMode.passenger),
       body: Stack(
         children: [
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
               initialCenter: _mapCenter,
-              initialZoom: 14.0,
+              initialZoom: _mapZoom,
               onTap: _onMapTap,
             ),
             children: [
@@ -427,14 +357,22 @@ class _MapScreenState extends State<MapScreen> {
                       point: _fromPoint!,
                       width: 40,
                       height: 40,
-                      child: const Icon(Icons.location_on, color: Colors.green, size: 40),
+                      child: const Icon(
+                        Icons.location_on,
+                        color: Colors.green,
+                        size: 40,
+                      ),
                     ),
                   if (_toPoint != null)
                     Marker(
                       point: _toPoint!,
                       width: 40,
                       height: 40,
-                      child: const Icon(Icons.flag, color: Colors.red, size: 40),
+                      child: const Icon(
+                        Icons.flag,
+                        color: Colors.red,
+                        size: 40,
+                      ),
                     ),
                 ],
               ),
@@ -454,7 +392,9 @@ class _MapScreenState extends State<MapScreen> {
             left: 15,
             right: 15,
             child: Card(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
               elevation: 8,
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
@@ -469,7 +409,10 @@ class _MapScreenState extends State<MapScreen> {
                         onTap: _selectFromPoint,
                         decoration: InputDecoration(
                           labelText: 'Откуда',
-                          prefixIcon: const Icon(Icons.my_location, color: Colors.green),
+                          prefixIcon: const Icon(
+                            Icons.my_location,
+                            color: Colors.green,
+                          ),
                           suffixIcon: _fromAddressController.text.isNotEmpty
                               ? IconButton(
                                   icon: const Icon(Icons.clear, size: 18),
@@ -484,25 +427,34 @@ class _MapScreenState extends State<MapScreen> {
                                 )
                               : null,
                           border: const OutlineInputBorder(),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
                         ),
                         onChanged: (val) {
                           _debounceFrom?.cancel();
-                          _debounceFrom = Timer(const Duration(milliseconds: 350), () async {
-                            if (val.trim().length >= 2) {
-                              final results = await GeocodingService.searchAddress(
-                                query: val,
-                                cityName: _selectedCity.name,
-                                cityLat: _mapCenter.latitude,
-                                cityLng: _mapCenter.longitude,
-                              );
-                              if (mounted) {
-                                setState(() => _fromSuggestions = results);
+                          _debounceFrom = Timer(
+                            const Duration(milliseconds: 350),
+                            () async {
+                              if (val.trim().length >= 2) {
+                                final results =
+                                    await GeocodingService.searchAddress(
+                                      query: val,
+                                      cityName: _selectedCity.name,
+                                      cityLat: _mapCenter.latitude,
+                                      cityLng: _mapCenter.longitude,
+                                    );
+                                if (mounted) {
+                                  setState(() => _fromSuggestions = results);
+                                }
+                              } else {
+                                if (mounted) {
+                                  setState(() => _fromSuggestions.clear());
+                                }
                               }
-                            } else {
-                              if (mounted) setState(() => _fromSuggestions.clear());
-                            }
-                          });
+                            },
+                          );
                         },
                       ),
 
@@ -513,23 +465,35 @@ class _MapScreenState extends State<MapScreen> {
                           constraints: const BoxConstraints(maxHeight: 150),
                           decoration: BoxDecoration(
                             color: Colors.white,
-                            border: Border.all(color: Colors.amber.shade400, width: 1.5),
+                            border: Border.all(
+                              color: Colors.amber.shade400,
+                              width: 1.5,
+                            ),
                             borderRadius: BorderRadius.circular(8),
                             boxShadow: const [
-                              BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2)),
+                              BoxShadow(
+                                color: Colors.black12,
+                                blurRadius: 4,
+                                offset: Offset(0, 2),
+                              ),
                             ],
                           ),
                           child: ListView.separated(
                             shrinkWrap: true,
                             padding: EdgeInsets.zero,
                             itemCount: _fromSuggestions.length,
-                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            separatorBuilder: (_, _) =>
+                                const Divider(height: 1),
                             itemBuilder: (context, index) {
                               final item = _fromSuggestions[index];
                               return ListTile(
                                 dense: true,
                                 tileColor: Colors.white,
-                                leading: const Icon(Icons.location_on, size: 18, color: Colors.amber),
+                                leading: const Icon(
+                                  Icons.location_on,
+                                  size: 18,
+                                  color: Colors.amber,
+                                ),
                                 title: Text(
                                   item.displayName,
                                   style: const TextStyle(
@@ -541,7 +505,8 @@ class _MapScreenState extends State<MapScreen> {
                                 onTap: () {
                                   setState(() {
                                     _fromPoint = LatLng(item.lat, item.lng);
-                                    _fromAddressController.text = item.displayName;
+                                    _fromAddressController.text =
+                                        item.displayName;
                                     _fromSuggestions.clear();
                                   });
                                   _fromFocusNode.unfocus();
@@ -564,7 +529,10 @@ class _MapScreenState extends State<MapScreen> {
                         onTap: _selectToPoint,
                         decoration: InputDecoration(
                           labelText: 'Куда',
-                          prefixIcon: const Icon(Icons.location_on, color: Colors.red),
+                          prefixIcon: const Icon(
+                            Icons.location_on,
+                            color: Colors.red,
+                          ),
                           suffixIcon: _toAddressController.text.isNotEmpty
                               ? IconButton(
                                   icon: const Icon(Icons.clear, size: 18),
@@ -579,25 +547,34 @@ class _MapScreenState extends State<MapScreen> {
                                 )
                               : null,
                           border: const OutlineInputBorder(),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
                         ),
                         onChanged: (val) {
                           _debounceTo?.cancel();
-                          _debounceTo = Timer(const Duration(milliseconds: 350), () async {
-                            if (val.trim().length >= 2) {
-                              final results = await GeocodingService.searchAddress(
-                                query: val,
-                                cityName: _selectedCity.name,
-                                cityLat: _mapCenter.latitude,
-                                cityLng: _mapCenter.longitude,
-                              );
-                              if (mounted) {
-                                setState(() => _toSuggestions = results);
+                          _debounceTo = Timer(
+                            const Duration(milliseconds: 350),
+                            () async {
+                              if (val.trim().length >= 2) {
+                                final results =
+                                    await GeocodingService.searchAddress(
+                                      query: val,
+                                      cityName: _selectedCity.name,
+                                      cityLat: _mapCenter.latitude,
+                                      cityLng: _mapCenter.longitude,
+                                    );
+                                if (mounted) {
+                                  setState(() => _toSuggestions = results);
+                                }
+                              } else {
+                                if (mounted) {
+                                  setState(() => _toSuggestions.clear());
+                                }
                               }
-                            } else {
-                              if (mounted) setState(() => _toSuggestions.clear());
-                            }
-                          });
+                            },
+                          );
                         },
                       ),
 
@@ -608,23 +585,35 @@ class _MapScreenState extends State<MapScreen> {
                           constraints: const BoxConstraints(maxHeight: 150),
                           decoration: BoxDecoration(
                             color: Colors.white,
-                            border: Border.all(color: Colors.amber.shade400, width: 1.5),
+                            border: Border.all(
+                              color: Colors.amber.shade400,
+                              width: 1.5,
+                            ),
                             borderRadius: BorderRadius.circular(8),
                             boxShadow: const [
-                              BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2)),
+                              BoxShadow(
+                                color: Colors.black12,
+                                blurRadius: 4,
+                                offset: Offset(0, 2),
+                              ),
                             ],
                           ),
                           child: ListView.separated(
                             shrinkWrap: true,
                             padding: EdgeInsets.zero,
                             itemCount: _toSuggestions.length,
-                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            separatorBuilder: (_, _) =>
+                                const Divider(height: 1),
                             itemBuilder: (context, index) {
                               final item = _toSuggestions[index];
                               return ListTile(
                                 dense: true,
                                 tileColor: Colors.white,
-                                leading: const Icon(Icons.location_on, size: 18, color: Colors.amber),
+                                leading: const Icon(
+                                  Icons.location_on,
+                                  size: 18,
+                                  color: Colors.amber,
+                                ),
                                 title: Text(
                                   item.displayName,
                                   style: const TextStyle(
@@ -636,7 +625,8 @@ class _MapScreenState extends State<MapScreen> {
                                 onTap: () {
                                   setState(() {
                                     _toPoint = LatLng(item.lat, item.lng);
-                                    _toAddressController.text = item.displayName;
+                                    _toAddressController.text =
+                                        item.displayName;
                                     _toSuggestions.clear();
                                   });
                                   _toFocusNode.unfocus();
@@ -657,9 +647,15 @@ class _MapScreenState extends State<MapScreen> {
                         keyboardType: TextInputType.number,
                         decoration: const InputDecoration(
                           labelText: 'Ваша цена (₸)',
-                          prefixIcon: Icon(Icons.attach_money, color: Colors.amber),
+                          prefixIcon: Icon(
+                            Icons.attach_money,
+                            color: Colors.amber,
+                          ),
                           border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 12),
@@ -676,8 +672,16 @@ class _MapScreenState extends State<MapScreen> {
                           ),
                           onPressed: _isCreatingOrder ? null : _submitOrder,
                           child: _isCreatingOrder
-                              ? const CircularProgressIndicator(color: Colors.black)
-                              : const Text('Заказать такси', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                              ? const CircularProgressIndicator(
+                                  color: Colors.black,
+                                )
+                              : const Text(
+                                  'Заказать такси',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
                         ),
                       ),
                     ],

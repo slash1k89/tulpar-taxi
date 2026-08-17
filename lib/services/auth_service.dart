@@ -1,6 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:latlong2/latlong.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -69,7 +68,8 @@ class AuthService {
   }) async {
     try {
       final cleanPhone = _cleanPhone(phone);
-      final fakeEmail = '$cleanPhone@tulpar.kz'; // Исправлено: единый домен проекта
+      final fakeEmail =
+          '$cleanPhone@tulpar.kz'; // Исправлено: единый домен проекта
 
       await _auth.signInWithEmailAndPassword(
         email: fakeEmail,
@@ -81,45 +81,5 @@ class AuthService {
     } catch (e) {
       return 'Ошибка авторизации: $e';
     }
-  }
-
-  Future<String?> createOrder({
-    required String fromAddress,
-    required String toAddress,
-    required int price, // Исправлено: числовой тип int
-    required LatLng fromPoint,
-    required LatLng toPoint,
-  }) async {
-    final user = _auth.currentUser;
-    if (user == null) return null;
-
-    final docRef = _db.collection('orders').doc();
-    final activeRef = _db.collection('active_orders').doc(user.uid);
-    await _db.runTransaction((transaction) async {
-      final activeOrder = await transaction.get(activeRef);
-      if (activeOrder.exists) {
-        throw StateError('У вас уже есть активный заказ.');
-      }
-      transaction.set(docRef, {
-      'passengerId': user.uid,
-      'fromAddress': fromAddress,
-      'toAddress': toAddress,
-      'price': price,
-      'fromLat': fromPoint.latitude,
-      'fromLng': fromPoint.longitude,
-      'toLat': toPoint.latitude,
-      'toLng': toPoint.longitude,
-      'status': 'searching',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      transaction.set(activeRef, {
-        'orderId': docRef.id,
-        'role': 'passenger',
-        'status': 'searching',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-    });
-
-    return docRef.id;
   }
 }

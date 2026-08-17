@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'driver_screen.dart';
+import '../../widgets/app_drawer.dart';
 
 class DriverSubscriptionScreen extends StatefulWidget {
   const DriverSubscriptionScreen({super.key});
 
   @override
-  State<DriverSubscriptionScreen> createState() => _DriverSubscriptionScreenState();
+  State<DriverSubscriptionScreen> createState() =>
+      _DriverSubscriptionScreenState();
 }
 
 class _DriverSubscriptionScreenState extends State<DriverSubscriptionScreen> {
@@ -26,7 +28,10 @@ class _DriverSubscriptionScreenState extends State<DriverSubscriptionScreen> {
   Future<void> _loadDriverData() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
       if (doc.exists) {
         final data = doc.data();
         if (data != null) {
@@ -77,6 +82,7 @@ class _DriverSubscriptionScreenState extends State<DriverSubscriptionScreen> {
         backgroundColor: const Color(0xFF1E1E1E),
         foregroundColor: Colors.amber,
       ),
+      drawer: const AppDrawer(mode: AppMode.driver),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: Colors.amber))
           : SingleChildScrollView(
@@ -106,12 +112,19 @@ class _DriverSubscriptionScreenState extends State<DriverSubscriptionScreen> {
                       decoration: InputDecoration(
                         labelText: 'Марка и модель (например: Toyota Camry)',
                         labelStyle: const TextStyle(color: Colors.white70),
-                        prefixIcon: const Icon(Icons.directions_car, color: Colors.amber),
+                        prefixIcon: const Icon(
+                          Icons.directions_car,
+                          color: Colors.amber,
+                        ),
                         filled: true,
                         fillColor: const Color(0xFF1E1E1E),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
-                      validator: (val) => val == null || val.trim().isEmpty ? 'Укажите марку авто' : null,
+                      validator: (val) => val == null || val.trim().isEmpty
+                          ? 'Укажите марку авто'
+                          : null,
                     ),
                     const SizedBox(height: 16),
                     TextFormField(
@@ -120,12 +133,19 @@ class _DriverSubscriptionScreenState extends State<DriverSubscriptionScreen> {
                       decoration: InputDecoration(
                         labelText: 'Цвет кузова (например: Белый)',
                         labelStyle: const TextStyle(color: Colors.white70),
-                        prefixIcon: const Icon(Icons.color_lens, color: Colors.amber),
+                        prefixIcon: const Icon(
+                          Icons.color_lens,
+                          color: Colors.amber,
+                        ),
                         filled: true,
                         fillColor: const Color(0xFF1E1E1E),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
-                      validator: (val) => val == null || val.trim().isEmpty ? 'Укажите цвет авто' : null,
+                      validator: (val) => val == null || val.trim().isEmpty
+                          ? 'Укажите цвет авто'
+                          : null,
                     ),
                     const SizedBox(height: 16),
                     TextFormField(
@@ -138,9 +158,13 @@ class _DriverSubscriptionScreenState extends State<DriverSubscriptionScreen> {
                         prefixIcon: const Icon(Icons.pin, color: Colors.amber),
                         filled: true,
                         fillColor: const Color(0xFF1E1E1E),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
-                      validator: (val) => val == null || val.trim().isEmpty ? 'Укажите гос. номер' : null,
+                      validator: (val) => val == null || val.trim().isEmpty
+                          ? 'Укажите гос. номер'
+                          : null,
                     ),
                     const SizedBox(height: 30),
                     SizedBox(
@@ -150,7 +174,9 @@ class _DriverSubscriptionScreenState extends State<DriverSubscriptionScreen> {
                         onPressed: _saveAndContinue,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.amber,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
                         ),
                         child: const Text(
                           'Сохранить и начать работу',

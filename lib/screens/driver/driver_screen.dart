@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../chat/chat_screen.dart';
 import 'driver_map_screen.dart';
+import '../../widgets/app_drawer.dart';
 import '../../services/order_workflow_service.dart';
 
 class DriverScreen extends StatefulWidget {
@@ -26,9 +27,9 @@ class _DriverScreenState extends State<DriverScreen> {
       if (mounted) setState(() => _isOnline = value);
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.toString())),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
       }
     } finally {
       if (mounted) setState(() => _isUpdatingAvailability = false);
@@ -59,7 +60,12 @@ class _DriverScreenState extends State<DriverScreen> {
     }
   }
 
-  double _calculateDistance(double fromLat, double fromLng, double toLat, double toLng) {
+  double _calculateDistance(
+    double fromLat,
+    double fromLng,
+    double toLat,
+    double toLng,
+  ) {
     if (fromLat == 0 || toLat == 0) return 0.0;
     final meters = const Distance().as(
       LengthUnit.Meter,
@@ -82,11 +88,7 @@ class _DriverScreenState extends State<DriverScreen> {
       stream: FirebaseFirestore.instance
           .collection('orders')
           .where('driverId', isEqualTo: _currentUserId)
-          .where('status', whereIn: [
-            'accepted',
-            'arrived',
-            'in_progress',
-          ])
+          .where('status', whereIn: ['accepted', 'arrived', 'in_progress'])
           .snapshots(),
       builder: (context, activeSnapshot) {
         if (activeSnapshot.connectionState == ConnectionState.waiting) {
@@ -99,8 +101,12 @@ class _DriverScreenState extends State<DriverScreen> {
         // Если есть активный заказ — переключаем на карту водителя со всеми данными заказа
         if (activeSnapshot.hasData && activeSnapshot.data!.docs.isNotEmpty) {
           final activeOrderDoc = activeSnapshot.data!.docs.first;
-          final orderData = activeOrderDoc.data() as Map<String, dynamic>? ?? {};
-          return DriverMapScreen(orderId: activeOrderDoc.id, orderData: orderData);
+          final orderData =
+              activeOrderDoc.data() as Map<String, dynamic>? ?? {};
+          return DriverMapScreen(
+            orderId: activeOrderDoc.id,
+            orderData: orderData,
+          );
         }
 
         // 2. Если активного заказа нет — показываем список поиска
@@ -122,6 +128,7 @@ class _DriverScreenState extends State<DriverScreen> {
               ),
             ],
           ),
+          drawer: const AppDrawer(mode: AppMode.driver),
           body: StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
                 .collection('orders')
@@ -129,7 +136,9 @@ class _DriverScreenState extends State<DriverScreen> {
                 .snapshots(),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator(color: Colors.amber));
+                return const Center(
+                  child: CircularProgressIndicator(color: Colors.amber),
+                );
               }
 
               if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
@@ -155,12 +164,19 @@ class _DriverScreenState extends State<DriverScreen> {
                   final double toLat = (data['toLat'] ?? 0.0).toDouble();
                   final double toLng = (data['toLng'] ?? 0.0).toDouble();
 
-                  final double distanceKm = _calculateDistance(fromLat, fromLng, toLat, toLng);
+                  final double distanceKm = _calculateDistance(
+                    fromLat,
+                    fromLng,
+                    toLat,
+                    toLng,
+                  );
 
                   return Card(
                     color: const Color(0xFF1E1E1E),
                     margin: const EdgeInsets.only(bottom: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
                     child: Padding(
                       padding: const EdgeInsets.all(16.0),
                       child: Column(
@@ -190,12 +206,19 @@ class _DriverScreenState extends State<DriverScreen> {
                           const SizedBox(height: 12),
                           Row(
                             children: [
-                              const Icon(Icons.my_location, color: Colors.green, size: 20),
+                              const Icon(
+                                Icons.my_location,
+                                color: Colors.green,
+                                size: 20,
+                              ),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
                                   data['fromAddress'] ?? '',
-                                  style: const TextStyle(color: Colors.white70, fontSize: 14),
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 14,
+                                  ),
                                 ),
                               ),
                             ],
@@ -203,12 +226,19 @@ class _DriverScreenState extends State<DriverScreen> {
                           const SizedBox(height: 8),
                           Row(
                             children: [
-                              const Icon(Icons.location_on, color: Colors.red, size: 20),
+                              const Icon(
+                                Icons.location_on,
+                                color: Colors.red,
+                                size: 20,
+                              ),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
                                   data['toAddress'] ?? '',
-                                  style: const TextStyle(color: Colors.white70, fontSize: 14),
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 14,
+                                  ),
                                 ),
                               ),
                             ],
@@ -219,7 +249,11 @@ class _DriverScreenState extends State<DriverScreen> {
                             children: [
                               Row(
                                 children: [
-                                  const Icon(Icons.route, color: Colors.amber, size: 20),
+                                  const Icon(
+                                    Icons.route,
+                                    color: Colors.amber,
+                                    size: 20,
+                                  ),
                                   const SizedBox(width: 6),
                                   Text(
                                     '${distanceKm.toStringAsFixed(1)} км',
@@ -234,14 +268,19 @@ class _DriverScreenState extends State<DriverScreen> {
                               Row(
                                 children: [
                                   IconButton(
-                                    icon: const Icon(Icons.chat, color: Colors.amber),
+                                    icon: const Icon(
+                                      Icons.chat,
+                                      color: Colors.amber,
+                                    ),
                                     onPressed: () {
                                       Navigator.push(
                                         context,
                                         MaterialPageRoute(
                                           builder: (_) => ChatScreen(
                                             orderId: doc.id,
-                                            peerName: data['passengerName'] ?? 'Пассажир',
+                                            peerName:
+                                                data['passengerName'] ??
+                                                'Пассажир',
                                           ),
                                         ),
                                       );

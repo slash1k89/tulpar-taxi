@@ -7,17 +7,19 @@ import 'package:latlong2/latlong.dart';
 
 import '../chat/chat_screen.dart';
 import '../../widgets/rating_dialog.dart';
+import '../../widgets/driver_location_marker_layer.dart';
+import '../../widgets/app_drawer.dart';
+import '../../app_routes.dart';
+import '../../services/order_cancellation_controller.dart';
 import '../../services/order_workflow_service.dart';
+import '../../utils/single_key_future_cache.dart';
 
 const _useCloudFunctions = bool.fromEnvironment('USE_CLOUD_FUNCTIONS');
 
 class OrderTrackingScreen extends StatefulWidget {
   final String orderId;
 
-  const OrderTrackingScreen({
-    super.key,
-    required this.orderId,
-  });
+  const OrderTrackingScreen({super.key, required this.orderId});
 
   @override
   State<OrderTrackingScreen> createState() => _OrderTrackingScreenState();
@@ -25,15 +27,41 @@ class OrderTrackingScreen extends StatefulWidget {
 
 class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   final MapController _mapController = MapController();
+  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _orderStream;
 
   StreamSubscription<DatabaseEvent>? _driverLocationSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
-      _firestoreDriverLocationSub;
-  LatLng? _driverLocation;
+  _firestoreDriverLocationSub;
+  final ValueNotifier<LatLng?> _driverLocationNotifier = ValueNotifier(null);
+  final SingleKeyFutureCache<String, DocumentSnapshot<Map<String, dynamic>>>
+  _driverProfileCache = SingleKeyFutureCache();
+  late final OrderCancellationController _cancellationController;
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>?
+  _cancellationSnackBar;
   bool _isMapReady = false;
   bool _hasShownRating = false;
+  bool _isReturningToMap = false;
+  bool _isCancelConfirmationOpen = false;
 
   static const double _defaultZoom = 15.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _orderStream = FirebaseFirestore.instance
+        .collection('orders')
+        .doc(widget.orderId)
+        .snapshots();
+    _cancellationController = OrderCancellationController(
+      onCleanup: _stopTrackingAndClearCancelledOrder,
+      onShowMessage: _showCancellationMessage,
+      onNavigate: _returnToCleanMap,
+      onError: _showCancellationError,
+      onStateChanged: () {
+        if (mounted && !_isReturningToMap) setState(() {});
+      },
+    );
+  }
 
   double _toDouble(dynamic value, double fallback) {
     if (value == null) return fallback;
@@ -53,32 +81,30 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
           .doc('current')
           .snapshots()
           .listen((snapshot) {
-        final data = snapshot.data();
-        if (data == null) return;
-        final lat = _toDouble(data['lat'], 0.0);
-        final lng = _toDouble(data['lng'], 0.0);
-        if (lat != 0.0 && lng != 0.0 && mounted) {
-          setState(() => _driverLocation = LatLng(lat, lng));
-        }
-      });
+            final data = snapshot.data();
+            if (data == null) return;
+            final lat = _toDouble(data['lat'], 0.0);
+            final lng = _toDouble(data['lng'], 0.0);
+            if (lat != 0.0 && lng != 0.0 && mounted) {
+              _driverLocationNotifier.value = LatLng(lat, lng);
+            }
+          });
       return;
     }
     _driverLocationSub = FirebaseDatabase.instance
         .ref('active_order_locations/${widget.orderId}/$driverId')
         .onValue
         .listen((event) {
-      if (event.snapshot.exists && event.snapshot.value != null) {
-        final data = Map<String, dynamic>.from(event.snapshot.value as Map);
-        final lat = _toDouble(data['lat'], 0.0);
-        final lng = _toDouble(data['lng'], 0.0);
+          if (event.snapshot.exists && event.snapshot.value != null) {
+            final data = Map<String, dynamic>.from(event.snapshot.value as Map);
+            final lat = _toDouble(data['lat'], 0.0);
+            final lng = _toDouble(data['lng'], 0.0);
 
-        if (lat != 0.0 && lng != 0.0 && mounted) {
-          setState(() {
-            _driverLocation = LatLng(lat, lng);
-          });
-        }
-      }
-    });
+            if (lat != 0.0 && lng != 0.0 && mounted) {
+              _driverLocationNotifier.value = LatLng(lat, lng);
+            }
+          }
+        });
   }
 
   void _safeMoveMap(LatLng pos) {
@@ -92,18 +118,16 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   }
 
   Future<void> _cancelOrder() async {
-    try {
-      await OrderWorkflowService().cancelOrder(widget.orderId);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка отмены заказа: $e')),
-        );
-      }
-    }
+    await _cancellationController.cancel(
+      () => OrderWorkflowService().cancelOrder(widget.orderId),
+    );
   }
 
   Future<void> _confirmCancelOrder(BuildContext context) async {
+    if (_isCancelConfirmationOpen || _cancellationController.isCancelling) {
+      return;
+    }
+    _isCancelConfirmationOpen = true;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -122,10 +146,71 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
         ],
       ),
     );
+    _isCancelConfirmationOpen = false;
 
-    if (confirm == true) {
-      _cancelOrder();
+    if (confirm == true && mounted) {
+      await _cancelOrder();
     }
+  }
+
+  void _stopTrackingAndClearCancelledOrder() {
+    _driverLocationSub?.cancel();
+    _driverLocationSub = null;
+    _firestoreDriverLocationSub?.cancel();
+    _firestoreDriverLocationSub = null;
+    _driverLocationNotifier.value = null;
+    _driverProfileCache.clear();
+    _isMapReady = false;
+
+    if (mounted && !_isReturningToMap) {
+      setState(() => _isReturningToMap = true);
+    }
+  }
+
+  Future<void> _showCancellationMessage(String message) {
+    if (!mounted) return Future<void>.value();
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    _cancellationSnackBar = messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(days: 1),
+        action: SnackBarAction(label: 'Закрыть', onPressed: () {}),
+      ),
+    );
+    return _cancellationSnackBar!.closed.then<void>((_) {});
+  }
+
+  void _showCancellationError(Object error, StackTrace stackTrace) {
+    debugPrint('Ошибка отмены заказа ${widget.orderId}: $error');
+    debugPrintStack(stackTrace: stackTrace);
+    if (!mounted || _cancellationController.hasHandledCancellation) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Не удалось отменить заказ. Проверьте соединение и повторите попытку.',
+        ),
+      ),
+    );
+  }
+
+  void _returnToCleanMap() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    Navigator.of(
+      context,
+    ).pushNamedAndRemoveUntil(AppRoutes.map, (route) => false);
+  }
+
+  void _handleRemoteCancellation() {
+    if (_cancellationController.hasHandledCancellation) return;
+    final requestedLocally = _cancellationController.isCancelling;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _cancellationController.handleObservedCancellation(
+        requestedLocally: requestedLocally,
+      );
+    });
   }
 
   void _handleCompletion(Map<String, dynamic> orderData) {
@@ -149,8 +234,11 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
 
   @override
   void dispose() {
+    _cancellationController.dispose();
+    _cancellationSnackBar?.close();
     _driverLocationSub?.cancel();
     _firestoreDriverLocationSub?.cancel();
+    _driverLocationNotifier.dispose();
     super.dispose();
   }
 
@@ -161,119 +249,158 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
         title: const Text('Ваш заказ'),
         backgroundColor: Colors.amber,
         foregroundColor: Colors.black,
-        automaticallyImplyLeading: false,
       ),
-      body: StreamBuilder<DocumentSnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('orders')
-            .doc(widget.orderId)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: Colors.amber));
-          }
+      drawer: const AppDrawer(mode: AppMode.passenger),
+      body: _isReturningToMap
+          ? const Center(child: Text('Заказ отменён'))
+          : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: _orderStream,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(
+                    child: CircularProgressIndicator(color: Colors.amber),
+                  );
+                }
 
-          if (snapshot.hasError || !snapshot.hasData || !snapshot.data!.exists) {
-            return const Center(child: Text('Ошибка загрузки данных заказа'));
-          }
+                if (snapshot.hasError ||
+                    !snapshot.hasData ||
+                    !snapshot.data!.exists) {
+                  return const Center(
+                    child: Text('Ошибка загрузки данных заказа'),
+                  );
+                }
 
-          final orderData = snapshot.data!.data() as Map<String, dynamic>? ?? {};
-          final status = orderData['status']?.toString() ?? 'searching';
-          final driverId = orderData['driverId']?.toString();
+                final orderData = snapshot.data!.data() ?? {};
+                final status = orderData['status']?.toString() ?? 'searching';
+                final driverId = orderData['driverId']?.toString();
 
-          if (driverId != null && driverId.isNotEmpty &&
-              _driverLocationSub == null && _firestoreDriverLocationSub == null) {
-            _listenToDriverLocation(driverId);
-          }
+                if (driverId != null &&
+                    driverId.isNotEmpty &&
+                    _driverLocationSub == null &&
+                    _firestoreDriverLocationSub == null) {
+                  _listenToDriverLocation(driverId);
+                }
 
-          if (status == 'completed') {
-            _handleCompletion(orderData);
-          }
-          if (status == 'completed' || status == 'cancelled') {
-            _driverLocationSub?.cancel();
-            _driverLocationSub = null;
-            _firestoreDriverLocationSub?.cancel();
-            _firestoreDriverLocationSub = null;
-            _driverLocation = null;
-          }
+                if (status == 'completed') {
+                  _handleCompletion(orderData);
+                }
+                if (status == 'cancelled') {
+                  _handleRemoteCancellation();
+                }
+                if (status == 'completed' || status == 'cancelled') {
+                  _driverLocationSub?.cancel();
+                  _driverLocationSub = null;
+                  _firestoreDriverLocationSub?.cancel();
+                  _firestoreDriverLocationSub = null;
+                  _driverLocationNotifier.value = null;
+                }
 
-          final double fromLat = _toDouble(orderData['fromLat'], 51.9555);
-          final double fromLng = _toDouble(orderData['fromLng'], 66.4032);
-          final double toLat = _toDouble(orderData['toLat'], 51.9555);
-          final double toLng = _toDouble(orderData['toLng'], 66.4032);
+                final double fromLat = _toDouble(orderData['fromLat'], 51.9555);
+                final double fromLng = _toDouble(orderData['fromLng'], 66.4032);
+                final double toLat = _toDouble(orderData['toLat'], 51.9555);
+                final double toLng = _toDouble(orderData['toLng'], 66.4032);
 
-          final LatLng passengerFrom = LatLng(fromLat, fromLng);
-          final LatLng passengerTo = LatLng(toLat, toLng);
+                final LatLng passengerFrom = LatLng(fromLat, fromLng);
+                final LatLng passengerTo = LatLng(toLat, toLng);
 
-          return Stack(
-            children: [
-              FlutterMap(
-                mapController: _mapController,
-                options: MapOptions(
-                  initialCenter: _driverLocation ?? passengerFrom,
-                  initialZoom: _defaultZoom,
-                  onMapReady: () {
-                    _isMapReady = true;
-                  },
-                ),
-                children: [
-                  TileLayer(
-                    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    userAgentPackageName: 'com.example.tulpar_taxi',
-                  ),
-                  MarkerLayer(
-                    markers: [
-                      Marker(
-                        point: passengerFrom,
-                        width: 45,
-                        height: 45,
-                        child: const Icon(Icons.person_pin_circle, color: Colors.green, size: 45),
+                return Stack(
+                  children: [
+                    FlutterMap(
+                      mapController: _mapController,
+                      options: MapOptions(
+                        initialCenter:
+                            _driverLocationNotifier.value ?? passengerFrom,
+                        initialZoom: _defaultZoom,
+                        onMapReady: () {
+                          _isMapReady = true;
+                        },
                       ),
-                      Marker(
-                        point: passengerTo,
-                        width: 45,
-                        height: 45,
-                        child: const Icon(Icons.flag, color: Colors.red, size: 40),
-                      ),
-                      if (_driverLocation != null)
-                        Marker(
-                          point: _driverLocation!,
-                          width: 45,
-                          height: 45,
-                          child: const Icon(Icons.local_taxi, color: Colors.amber, size: 40),
+                      children: [
+                        TileLayer(
+                          urlTemplate:
+                              'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                          userAgentPackageName: 'com.example.tulpar_taxi',
                         ),
-                    ],
-                  ),
-                ],
-              ),
-              Positioned(
-                bottom: 20,
-                left: 15,
-                right: 15,
-                child: Card(
-                  elevation: 8,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: _buildStatusWidget(context, status, orderData, driverId),
-                  ),
-                ),
-              ),
-              if (_driverLocation != null)
-                Positioned(
-                  right: 16,
-                  bottom: 250,
-                  child: FloatingActionButton(
-                    backgroundColor: Colors.white,
-                    mini: true,
-                    onPressed: () => _safeMoveMap(_driverLocation!),
-                    child: const Icon(Icons.my_location, color: Colors.amber),
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
+                        MarkerLayer(
+                          markers: [
+                            Marker(
+                              point: passengerFrom,
+                              width: 45,
+                              height: 45,
+                              child: const Icon(
+                                Icons.person_pin_circle,
+                                color: Colors.green,
+                                size: 45,
+                              ),
+                            ),
+                            Marker(
+                              point: passengerTo,
+                              width: 45,
+                              height: 45,
+                              child: const Icon(
+                                Icons.flag,
+                                color: Colors.red,
+                                size: 40,
+                              ),
+                            ),
+                          ],
+                        ),
+                        DriverLocationMarkerLayer(
+                          positionListenable: _driverLocationNotifier,
+                          marker: const Icon(
+                            Icons.local_taxi,
+                            color: Colors.amber,
+                            size: 40,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Positioned(
+                      bottom: 20,
+                      left: 15,
+                      right: 15,
+                      child: Card(
+                        elevation: 8,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: _buildStatusWidget(
+                            context,
+                            status,
+                            orderData,
+                            driverId,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      right: 16,
+                      bottom: 250,
+                      child: ValueListenableBuilder<LatLng?>(
+                        valueListenable: _driverLocationNotifier,
+                        builder: (context, driverLocation, child) {
+                          if (driverLocation == null) {
+                            return const SizedBox.shrink();
+                          }
+                          return FloatingActionButton(
+                            backgroundColor: Colors.white,
+                            mini: true,
+                            onPressed: () => _safeMoveMap(driverLocation),
+                            child: child,
+                          );
+                        },
+                        child: const Icon(
+                          Icons.my_location,
+                          color: Colors.amber,
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
     );
   }
 
@@ -298,9 +425,15 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton(
-                onPressed: _cancelOrder,
+                onPressed: _cancellationController.isCancelling
+                    ? null
+                    : () => _confirmCancelOrder(context),
                 style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-                child: const Text('Отменить поиск'),
+                child: Text(
+                  _cancellationController.isCancelling
+                      ? 'Отмена...'
+                      : 'Отменить поиск',
+                ),
               ),
             ),
           ],
@@ -333,7 +466,11 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             const SizedBox(height: 8),
             const Text(
               'Поездка в процессе',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.green,
+              ),
             ),
             const SizedBox(height: 4),
             Text('Направление: ${orderData['toAddress'] ?? 'Адрес не указан'}'),
@@ -379,7 +516,8 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     required String? driverId,
     bool isArrived = false,
   }) {
-    final hasCarDataInOrder = orderData['carModel'] != null || orderData['carNumber'] != null;
+    final hasCarDataInOrder =
+        orderData['carModel'] != null || orderData['carNumber'] != null;
 
     if (hasCarDataInOrder || driverId == null || driverId.isEmpty) {
       return _buildDriverInfoCard(
@@ -395,8 +533,12 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
       );
     }
 
-    return FutureBuilder<DocumentSnapshot>(
-      future: FirebaseFirestore.instance.collection('users').doc(driverId).get(),
+    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      future: _driverProfileCache.get(
+        driverId,
+        () =>
+            FirebaseFirestore.instance.collection('users').doc(driverId).get(),
+      ),
       builder: (context, snapshot) {
         String? driverName = orderData['driverName']?.toString();
         String? carModel;
@@ -404,7 +546,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
         String? carNumber;
 
         if (snapshot.hasData && snapshot.data!.exists) {
-          final profile = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+          final profile = snapshot.data!.data() ?? {};
           driverName = profile['name'] ?? profile['fullName'] ?? driverName;
           carModel = profile['carModel'] ?? profile['car'];
           carColor = profile['carColor'];
@@ -437,21 +579,30 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     String? carNumber,
     bool isArrived = false,
   }) {
-    final finalDriverName = driverName ?? orderData['driverName']?.toString() ?? 'Водитель';
-    final finalCarModel = carModel ?? orderData['carModel']?.toString() ?? 'Автомобиль';
+    final finalDriverName =
+        driverName ?? orderData['driverName']?.toString() ?? 'Водитель';
+    final finalCarModel =
+        carModel ?? orderData['carModel']?.toString() ?? 'Автомобиль';
     final finalCarColor = carColor ?? orderData['carColor']?.toString() ?? '';
-    final finalCarNumber = carNumber ?? orderData['carNumber']?.toString() ?? '';
+    final finalCarNumber =
+        carNumber ?? orderData['carNumber']?.toString() ?? '';
 
-    final String carDetails = [finalCarModel, finalCarColor, finalCarNumber]
-        .where((element) => element.trim().isNotEmpty)
-        .join(' • ');
+    final String carDetails = [
+      finalCarModel,
+      finalCarColor,
+      finalCarNumber,
+    ].where((element) => element.trim().isNotEmpty).join(' • ');
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
           title,
-          style: TextStyle(color: titleColor, fontSize: 16, fontWeight: FontWeight.bold),
+          style: TextStyle(
+            color: titleColor,
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
           textAlign: TextAlign.center,
         ),
         if (isArrived) ...[
@@ -464,7 +615,10 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             ),
             child: const Text(
               'Пожалуйста, выходите к автомобилю',
-              style: TextStyle(color: Colors.green, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: Colors.green,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],
@@ -482,10 +636,15 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                 children: [
                   Text(
                     finalDriverName,
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
                   ),
                   Text(
-                    carDetails.isEmpty ? 'Данные машины загружаются...' : carDetails,
+                    carDetails.isEmpty
+                        ? 'Данные машины загружаются...'
+                        : carDetails,
                     style: const TextStyle(color: Colors.grey, fontSize: 13),
                   ),
                 ],
@@ -526,7 +685,9 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                   foregroundColor: Colors.red,
                   side: const BorderSide(color: Colors.red),
                 ),
-                onPressed: () => _confirmCancelOrder(context),
+                onPressed: _cancellationController.isCancelling
+                    ? null
+                    : () => _confirmCancelOrder(context),
               ),
             ),
           ],

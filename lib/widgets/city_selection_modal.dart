@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import '../models/city.dart';
-import '../services/city_service.dart';
 
-Future<void> showCitySelectionModal(
+Future<City?> showCitySelectionModal(
   BuildContext context, {
   required String currentCityId,
-  required Function(City selectedCity) onCityChanged,
 }) async {
-  showModalBottomSheet(
+  return showModalBottomSheet<City>(
     context: context,
     isScrollControlled: true, // Исправлено: безопасное масштабирование
     shape: const RoundedRectangleBorder(
@@ -25,7 +23,8 @@ Future<void> showCitySelectionModal(
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
-            Flexible( // Исправлено: защита от Bottom Overflow
+            Flexible(
+              // Исправлено: защита от Bottom Overflow
               child: ListView.builder(
                 shrinkWrap: true,
                 itemCount: availableCities.length,
@@ -38,10 +37,8 @@ Future<void> showCitySelectionModal(
                     trailing: isSelected
                         ? const Icon(Icons.check_circle, color: Colors.amber)
                         : null,
-                    onTap: () async {
-                      await CityService.setSelectedCity(city.id);
-                      onCityChanged(city);
-                      if (context.mounted) Navigator.pop(context);
+                    onTap: () {
+                      Navigator.pop(context, city);
                     },
                   );
                 },

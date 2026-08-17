@@ -75,8 +75,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: const Color(0xFF1E1E1E),
+      backgroundColor: colorScheme.surface,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -91,46 +92,61 @@ class _LoginScreenState extends State<LoginScreen> {
                   height: 230,
                   fit: BoxFit.contain,
                   errorBuilder: (context, error, stackTrace) {
-                    return const Icon(Icons.local_taxi, size: 120, color: Colors.amber);
+                    return const Icon(
+                      Icons.local_taxi,
+                      size: 120,
+                      color: Colors.amber,
+                    );
                   },
                 ),
                 const SizedBox(height: 16),
-                const Text(
+                Text(
                   'Вход в систему',
                   style: TextStyle(
-                    color: Colors.white70,
+                    color: colorScheme.onSurfaceVariant,
                     fontSize: 18,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
                 const SizedBox(height: 32),
                 TextField(
-  controller: _phoneController,
-  style: const TextStyle(color: Colors.white),
-  keyboardType: TextInputType.phone,
-  inputFormatters: [
-    // УБРАНО: FilteringTextInputFormatter.digitsOnly,
-    RuPhoneInputFormatter(), // Оставляем только ваш форматировщик
-  ],
-  decoration: InputDecoration(
-    labelText: 'Номер телефона',
-    hintText: '+7 (700) 000-00-00',
-    // ...
-  ),
-),
+                  key: const Key('login_phone_field'),
+                  controller: _phoneController,
+                  style: TextStyle(color: colorScheme.onSurface),
+                  cursorColor: colorScheme.primary,
+                  cursorErrorColor: colorScheme.error,
+                  keyboardType: TextInputType.phone,
+                  inputFormatters: [RuPhoneInputFormatter()],
+                  decoration: InputDecoration(
+                    labelText: 'Номер телефона',
+                    labelStyle: TextStyle(color: colorScheme.onSurfaceVariant),
+                    floatingLabelStyle: TextStyle(color: colorScheme.primary),
+                    hintText: '+7 (700) 000-00-00',
+                    hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
+                    errorStyle: TextStyle(color: colorScheme.error),
+                    prefixIcon: Icon(
+                      Icons.phone_outlined,
+                      color: colorScheme.primary,
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 16),
                 TextField(
+                  key: const Key('login_password_field'),
                   controller: _passwordController,
                   obscureText: true,
-                  style: const TextStyle(color: Colors.white),
+                  style: TextStyle(color: colorScheme.onSurface),
+                  cursorColor: colorScheme.primary,
+                  cursorErrorColor: colorScheme.error,
                   decoration: InputDecoration(
                     labelText: 'Пароль',
-                    labelStyle: const TextStyle(color: Colors.white70),
-                    prefixIcon: const Icon(Icons.lock, color: Colors.amber),
-                    filled: true,
-                    fillColor: const Color(0xFF2A2A2A),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
+                    labelStyle: TextStyle(color: colorScheme.onSurfaceVariant),
+                    floatingLabelStyle: TextStyle(color: colorScheme.primary),
+                    hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
+                    errorStyle: TextStyle(color: colorScheme.error),
+                    prefixIcon: Icon(
+                      Icons.lock_outline,
+                      color: colorScheme.primary,
                     ),
                   ),
                 ),
@@ -141,17 +157,20 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: ElevatedButton(
                     onPressed: _isLoading ? null : _login,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.amber,
+                      backgroundColor: colorScheme.primary,
+                      foregroundColor: colorScheme.onPrimary,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
                     child: _isLoading
-                        ? const CircularProgressIndicator(color: Colors.black)
-                        : const Text(
+                        ? CircularProgressIndicator(
+                            color: colorScheme.onPrimary,
+                          )
+                        : Text(
                             'Войти',
                             style: TextStyle(
-                              color: Colors.black,
+                              color: colorScheme.onPrimary,
                               fontSize: 17,
                               fontWeight: FontWeight.bold,
                             ),
@@ -162,9 +181,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Text(
+                    Text(
                       'Нет аккаунта? ',
-                      style: TextStyle(color: Colors.white70),
+                      style: TextStyle(color: colorScheme.onSurfaceVariant),
                     ),
                     TextButton(
                       onPressed: () {
@@ -175,10 +194,10 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         );
                       },
-                      child: const Text(
+                      child: Text(
                         'Зарегистрироваться',
                         style: TextStyle(
-                          color: Colors.amber,
+                          color: colorScheme.primary,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -220,7 +239,6 @@ class RuPhoneInputFormatter extends TextInputFormatter {
 
     // 3. Если цифр больше нет — полностью очищаем поле
     if (newDigits.isEmpty) {
-
       return const TextEditingValue(
         text: '',
         selection: TextSelection.collapsed(offset: 0),
@@ -240,18 +258,29 @@ class RuPhoneInputFormatter extends TextInputFormatter {
     final buffer = StringBuffer('+7 ');
     if (newDigits.isNotEmpty) {
       buffer.write('(');
-      buffer.write(newDigits.substring(0, newDigits.length >= 3 ? 3 : newDigits.length));
+      buffer.write(
+        newDigits.substring(0, newDigits.length >= 3 ? 3 : newDigits.length),
+      );
       if (newDigits.length >= 3) {
         buffer.write(') ');
-        buffer.write(newDigits.substring(3, newDigits.length >= 6 ? 6 : newDigits.length));
+        buffer.write(
+          newDigits.substring(3, newDigits.length >= 6 ? 6 : newDigits.length),
+        );
       }
       if (newDigits.length >= 6) {
         buffer.write('-');
-        buffer.write(newDigits.substring(6, newDigits.length >= 8 ? 8 : newDigits.length));
+        buffer.write(
+          newDigits.substring(6, newDigits.length >= 8 ? 8 : newDigits.length),
+        );
       }
       if (newDigits.length >= 8) {
         buffer.write('-');
-        buffer.write(newDigits.substring(8, newDigits.length >= 10 ? 10 : newDigits.length));
+        buffer.write(
+          newDigits.substring(
+            8,
+            newDigits.length >= 10 ? 10 : newDigits.length,
+          ),
+        );
       }
     }
 
