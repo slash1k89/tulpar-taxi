@@ -2,6 +2,10 @@
 
 A new Flutter project.
 
+## Architecture
+
+- [Order dispatch architecture](ORDER_DISPATCH_ARCHITECTURE.md)
+
 ## Getting Started
 
 This project is a starting point for a Flutter application.
