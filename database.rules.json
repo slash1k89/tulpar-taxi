@@ -1,0 +1,30 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "active_order_locations": {
+      "$orderId": {
+        "$driverId": {
+          ".read": "auth != null && root.child('order_tracking_acl').child($orderId).child(auth.uid).val() === true",
+          ".write": "auth != null && auth.uid === $driverId && root.child('order_tracking_acl').child($orderId).child($driverId).val() === true && root.child('driver_active_order').child($driverId).val() === $orderId && root.child('driver_presence').child($driverId).child('online').val() === true",
+          ".validate": "!newData.exists() || newData.hasChildren(['lat', 'lng', 'lastUpdated'])",
+          "lat": {
+            ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
+          },
+          "lng": {
+            ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
+          },
+          "lastUpdated": {
+            ".validate": "newData.isNumber() && newData.val() <= now + 60000"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
+    },
+    "order_tracking_acl": { ".read": false, ".write": false },
+    "driver_active_order": { ".read": false, ".write": false },
+    "driver_presence": { ".read": false, ".write": false }
+  }
+}

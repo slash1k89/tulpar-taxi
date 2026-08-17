@@ -1,0 +1,287 @@
+rules_version = '2';
+
+// Tulpar Taxi data model:
+// - users contains private profile data (including phone); only its owner may read it.
+// - orders contains the two participants and the ride state.
+// - order messages belong only to the order participants.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isShortString(value, maximumLength) {
+      return value is string && value.size() > 0 && value.size() <= maximumLength;
+    }
+
+    function isValidNewUser(userId) {
+      return request.resource.data.keys().hasOnly([
+               'uid', 'name', 'phone', 'role', 'rating', 'createdAt'
+             ]) &&
+             request.resource.data.uid == userId &&
+             isShortString(request.resource.data.name, 80) &&
+             isShortString(request.resource.data.phone, 20) &&
+             request.resource.data.role == 'passenger' &&
+             request.resource.data.rating == 5.0 &&
+             request.resource.data.createdAt == request.time;
+    }
+
+    function isValidProfileUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+               'name', 'phone', 'carModel', 'carColor', 'carNumber'
+             ]) &&
+             request.resource.data.uid == resource.data.uid &&
+             request.resource.data.role == resource.data.role &&
+             request.resource.data.createdAt == resource.data.createdAt &&
+             isShortString(request.resource.data.name, 80) &&
+             isShortString(request.resource.data.phone, 20) &&
+             (!('carModel' in request.resource.data) || isShortString(request.resource.data.carModel, 80)) &&
+             (!('carColor' in request.resource.data) || isShortString(request.resource.data.carColor, 40)) &&
+             (!('carNumber' in request.resource.data) || isShortString(request.resource.data.carNumber, 20));
+    }
+
+    function isParticipant(order) {
+      return signedIn() &&
+             (order.passengerId == request.auth.uid || order.driverId == request.auth.uid);
+    }
+
+    function isActiveStatus(status) {
+      return status == 'searching' || status == 'accepted' ||
+             status == 'arrived' || status == 'in_progress';
+    }
+
+    function hasActiveBindingAfter(userId, orderId, role, status) {
+      return existsAfter(/databases/$(database)/documents/active_orders/$(userId)) &&
+             getAfter(/databases/$(database)/documents/active_orders/$(userId)).data.orderId == orderId &&
+             getAfter(/databases/$(database)/documents/active_orders/$(userId)).data.role == role &&
+             getAfter(/databases/$(database)/documents/active_orders/$(userId)).data.status == status;
+    }
+
+    function terminalBindingsCleared() {
+      return !existsAfter(/databases/$(database)/documents/active_orders/$(resource.data.passengerId)) &&
+             (!('driverId' in resource.data) ||
+              !existsAfter(/databases/$(database)/documents/active_orders/$(resource.data.driverId)));
+    }
+
+    function terminalTransitionOccursNow(orderId) {
+      return existsAfter(/databases/$(database)/documents/orders/$(orderId)) &&
+             ((getAfter(/databases/$(database)/documents/orders/$(orderId)).data.status == 'completed' &&
+               getAfter(/databases/$(database)/documents/orders/$(orderId)).data.completedAt == request.time) ||
+              (getAfter(/databases/$(database)/documents/orders/$(orderId)).data.status == 'cancelled' &&
+               getAfter(/databases/$(database)/documents/orders/$(orderId)).data.cancelledAt == request.time));
+    }
+
+    function activeBindingsMatchStatusAfter(orderId, status) {
+      return (!exists(/databases/$(database)/documents/active_orders/$(resource.data.passengerId)) ||
+              hasActiveBindingAfter(resource.data.passengerId, orderId, 'passenger', status)) &&
+             (!exists(/databases/$(database)/documents/active_orders/$(resource.data.driverId)) ||
+              hasActiveBindingAfter(resource.data.driverId, orderId, 'driver', status));
+    }
+
+    function currentUser() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isDriver() {
+      return signedIn() && currentUser().role == 'driver';
+    }
+
+    function orderDocument(orderId) {
+      return get(/databases/$(database)/documents/orders/$(orderId)).data;
+    }
+
+    function isOrderParticipant(orderId) {
+      return isParticipant(orderDocument(orderId));
+    }
+
+    function isDriverSnapshot() {
+      return request.resource.data.driverId == request.auth.uid &&
+             request.resource.data.driverName == currentUser().name &&
+             request.resource.data.driverPhone == currentUser().phone &&
+             request.resource.data.carModel is string &&
+             request.resource.data.carModel.size() <= 80 &&
+             request.resource.data.carColor is string &&
+             request.resource.data.carColor.size() <= 40 &&
+             request.resource.data.carNumber is string &&
+             request.resource.data.carNumber.size() <= 20 &&
+             (!('carModel' in currentUser()) || request.resource.data.carModel == currentUser().carModel) &&
+             (!('carColor' in currentUser()) || request.resource.data.carColor == currentUser().carColor) &&
+             (!('carNumber' in currentUser()) || request.resource.data.carNumber == currentUser().carNumber);
+    }
+
+    function isDriverAcceptance(orderId) {
+      return isDriver() && resource.data.status == 'searching' &&
+             !exists(/databases/$(database)/documents/active_orders/$(request.auth.uid)) &&
+             request.resource.data.status == 'accepted' &&
+             request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+               'driverId', 'driverName', 'driverPhone', 'carModel', 'carColor',
+               'carNumber', 'status', 'acceptedAt'
+             ]) &&
+             request.resource.data.acceptedAt == request.time && isDriverSnapshot() &&
+             hasActiveBindingAfter(request.auth.uid, orderId, 'driver', 'accepted') &&
+             (!exists(/databases/$(database)/documents/active_orders/$(resource.data.passengerId)) ||
+              hasActiveBindingAfter(resource.data.passengerId, orderId, 'passenger', 'accepted'));
+    }
+
+    function isDriverStatusTransition(orderId) {
+      return isDriver() && resource.data.driverId == request.auth.uid && (
+        (resource.data.status == 'accepted' && request.resource.data.status == 'arrived' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'arrivedAt']) &&
+         request.resource.data.arrivedAt == request.time && activeBindingsMatchStatusAfter(orderId, 'arrived')) ||
+        (resource.data.status == 'arrived' && request.resource.data.status == 'in_progress' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'startedAt']) &&
+         request.resource.data.startedAt == request.time && activeBindingsMatchStatusAfter(orderId, 'in_progress')) ||
+        (resource.data.status == 'in_progress' && request.resource.data.status == 'completed' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'completedAt']) &&
+         request.resource.data.completedAt == request.time && terminalBindingsCleared())
+      );
+    }
+
+    function isPassengerCancellation() {
+      return signedIn() && resource.data.passengerId == request.auth.uid &&
+             (resource.data.status == 'searching' || resource.data.status == 'accepted' || resource.data.status == 'arrived') &&
+             request.resource.data.status == 'cancelled' &&
+             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt']) &&
+             request.resource.data.cancelledAt == request.time && terminalBindingsCleared();
+    }
+
+    function isActiveAssignedDriver(orderId) {
+      return signedIn() && orderDocument(orderId).driverId == request.auth.uid &&
+             (orderDocument(orderId).status == 'accepted' ||
+              orderDocument(orderId).status == 'arrived' ||
+              orderDocument(orderId).status == 'in_progress');
+    }
+
+    function isValidTrackingLocation() {
+      return request.resource.data.keys().hasOnly(['lat', 'lng', 'updatedAt']) &&
+             request.resource.data.lat is number && request.resource.data.lat >= -90 && request.resource.data.lat <= 90 &&
+             request.resource.data.lng is number && request.resource.data.lng >= -180 && request.resource.data.lng <= 180 &&
+             request.resource.data.updatedAt == request.time;
+    }
+
+    function isValidNewOrder(orderId) {
+      return request.resource.data.keys().hasOnly([
+               'passengerId', 'fromAddress', 'toAddress', 'price', 'fromLat',
+               'fromLng', 'toLat', 'toLng', 'status', 'createdAt'
+             ]) &&
+             request.resource.data.passengerId == request.auth.uid &&
+             isShortString(request.resource.data.fromAddress, 300) &&
+             isShortString(request.resource.data.toAddress, 300) &&
+             request.resource.data.price is int && request.resource.data.price > 0 &&
+             request.resource.data.price <= 1000000 &&
+             request.resource.data.fromLat is number && request.resource.data.fromLat >= -90 && request.resource.data.fromLat <= 90 &&
+             request.resource.data.fromLng is number && request.resource.data.fromLng >= -180 && request.resource.data.fromLng <= 180 &&
+             request.resource.data.toLat is number && request.resource.data.toLat >= -90 && request.resource.data.toLat <= 90 &&
+             request.resource.data.toLng is number && request.resource.data.toLng >= -180 && request.resource.data.toLng <= 180 &&
+             request.resource.data.status == 'searching' &&
+             request.resource.data.createdAt == request.time &&
+             !exists(/databases/$(database)/documents/active_orders/$(request.auth.uid)) &&
+             hasActiveBindingAfter(request.auth.uid, orderId, 'passenger', 'searching');
+    }
+
+    match /users/{userId} {
+      allow create: if isOwner(userId) && isValidNewUser(userId);
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow update: if isOwner(userId) && isValidProfileUpdate();
+      allow delete: if false;
+
+      match /fcmTokens/{token} {
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId) &&
+          request.resource.data.keys().hasOnly(['token', 'platform', 'createdAt', 'updatedAt']) &&
+          request.resource.data.token == token &&
+          request.resource.data.platform == 'android' &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.updatedAt == request.time;
+        allow update: if isOwner(userId) &&
+          request.resource.data.keys().hasOnly(['token', 'platform', 'createdAt', 'updatedAt']) &&
+          request.resource.data.token == resource.data.token &&
+          request.resource.data.token == token &&
+          request.resource.data.platform == 'android' &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.updatedAt == request.time;
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    // Exactly one active-order binding per user. It is written in the same
+    // transaction as the order state change and removed only on a terminal
+    // state transition. Legacy orders without this document are read-only.
+    match /active_orders/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow create: if isOwner(userId) &&
+        request.resource.data.keys().hasOnly(['orderId', 'role', 'status', 'createdAt']) &&
+        request.resource.data.orderId is string && request.resource.data.orderId.size() > 0 &&
+        (request.resource.data.role == 'passenger' || request.resource.data.role == 'driver') &&
+        isActiveStatus(request.resource.data.status) &&
+        request.resource.data.createdAt == request.time &&
+        existsAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)) &&
+        getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.status == request.resource.data.status &&
+        ((request.resource.data.role == 'passenger' &&
+          getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.passengerId == userId &&
+          getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.createdAt == request.resource.data.createdAt) ||
+         (request.resource.data.role == 'driver' && isDriver() &&
+          getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.driverId == userId &&
+          getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.acceptedAt == request.resource.data.createdAt));
+      allow update: if signedIn() &&
+        resource.data.keys().hasOnly(['orderId', 'role', 'status', 'createdAt']) &&
+        request.resource.data.keys().hasOnly(['orderId', 'role', 'status', 'createdAt']) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
+        request.resource.data.orderId == resource.data.orderId &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        isActiveStatus(request.resource.data.status) &&
+        existsAfter(/databases/$(database)/documents/orders/$(resource.data.orderId)) &&
+        getAfter(/databases/$(database)/documents/orders/$(resource.data.orderId)).data.status == request.resource.data.status &&
+        isDriver() &&
+        getAfter(/databases/$(database)/documents/orders/$(resource.data.orderId)).data.driverId == request.auth.uid;
+      allow delete: if signedIn() &&
+        resource.data.keys().hasOnly(['orderId', 'role', 'status', 'createdAt']) &&
+        resource.data.orderId is string &&
+        terminalTransitionOccursNow(resource.data.orderId) &&
+        isParticipant(get(/databases/$(database)/documents/orders/$(resource.data.orderId)).data) &&
+        !existsAfter(/databases/$(database)/documents/active_orders/$(userId));
+    }
+
+    match /orders/{orderId} {
+      // Available rides can be queried only with status == 'searching'; once
+      // accepted, the document is visible only to its two participants.
+      allow get: if signedIn() && ((resource.data.status == 'searching' && isDriver()) || isParticipant(resource.data));
+      allow list: if signedIn() && ((resource.data.status == 'searching' && isDriver()) || isParticipant(resource.data));
+      allow create: if signedIn() && isValidNewOrder(orderId);
+      allow update: if isDriverAcceptance(orderId) || isDriverStatusTransition(orderId) || isPassengerCancellation();
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isParticipant(get(/databases/$(database)/documents/orders/$(orderId)).data);
+        allow create: if isParticipant(get(/databases/$(database)/documents/orders/$(orderId)).data) &&
+          request.resource.data.keys().hasOnly(['senderId', 'text', 'createdAt']) &&
+          request.resource.data.senderId == request.auth.uid &&
+          isShortString(request.resource.data.text, 2000) &&
+          request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+
+      // One short-lived current location for an active ride. A passenger can
+      // read only their assigned driver's point, and only the driver can write
+      // it. The update interval is enforced both here and by the client.
+      match /tracking/{trackingId} {
+        allow get: if trackingId == 'current' && isOrderParticipant(orderId);
+        allow list: if false;
+        allow create: if trackingId == 'current' && isDriver() && isActiveAssignedDriver(orderId) &&
+          isValidTrackingLocation();
+        allow update: if trackingId == 'current' && isDriver() && isActiveAssignedDriver(orderId) &&
+          isValidTrackingLocation() &&
+          request.time >= resource.data.updatedAt + duration.value(5, 's');
+        allow delete: if trackingId == 'current' && isOrderParticipant(orderId) &&
+          terminalTransitionOccursNow(orderId);
+      }
+    }
+  }
+}

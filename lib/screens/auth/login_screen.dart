@@ -1,0 +1,264 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../map/map_screen.dart';
+import '../map/order_tracking_screen.dart';
+import '../driver/driver_map_screen.dart';
+import '../../services/active_order_service.dart';
+import 'register_screen.dart';
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  bool _isLoading = false;
+
+  Future<void> _login() async {
+    final rawPhone = _phoneController.text.replaceAll(RegExp(r'\D'), '');
+
+    if (rawPhone.length < 11 || _passwordController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Введите корректный номер телефона и пароль'),
+          backgroundColor: Colors.amber,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      // Авторизация по номеру телефона (привязанному к email под капотом)
+      await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: '$rawPhone@tulpar.kz',
+        password: _passwordController.text.trim(),
+      );
+
+      final activeOrder = await ActiveOrderService().findCurrentOrder();
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) {
+              if (activeOrder == null) return const MapScreen();
+              if (activeOrder.isDriver) {
+                return DriverMapScreen(
+                  orderId: activeOrder.orderId,
+                  orderData: activeOrder.data,
+                );
+              }
+              return OrderTrackingScreen(orderId: activeOrder.orderId);
+            },
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Ошибка входа: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF1E1E1E),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // Увеличенный и отцентрованный логотип
+                Image.asset(
+                  'assets/logo.png',
+                  height: 230,
+                  fit: BoxFit.contain,
+                  errorBuilder: (context, error, stackTrace) {
+                    return const Icon(Icons.local_taxi, size: 120, color: Colors.amber);
+                  },
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Вход в систему',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 32),
+                TextField(
+  controller: _phoneController,
+  style: const TextStyle(color: Colors.white),
+  keyboardType: TextInputType.phone,
+  inputFormatters: [
+    // УБРАНО: FilteringTextInputFormatter.digitsOnly,
+    RuPhoneInputFormatter(), // Оставляем только ваш форматировщик
+  ],
+  decoration: InputDecoration(
+    labelText: 'Номер телефона',
+    hintText: '+7 (700) 000-00-00',
+    // ...
+  ),
+),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _passwordController,
+                  obscureText: true,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Пароль',
+                    labelStyle: const TextStyle(color: Colors.white70),
+                    prefixIcon: const Icon(Icons.lock, color: Colors.amber),
+                    filled: true,
+                    fillColor: const Color(0xFF2A2A2A),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 28),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : _login,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.amber,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: _isLoading
+                        ? const CircularProgressIndicator(color: Colors.black)
+                        : const Text(
+                            'Войти',
+                            style: TextStyle(
+                              color: Colors.black,
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text(
+                      'Нет аккаунта? ',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const RegisterScreen(),
+                          ),
+                        );
+                      },
+                      child: const Text(
+                        'Зарегистрироваться',
+                        style: TextStyle(
+                          color: Colors.amber,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Форматировщик ввода номера телефона +7 (XXX) XXX-XX-XX
+// Исправленный форматировщик номера телефона
+class RuPhoneInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    // 1. Если поле полностью очищено — разрешаем очистку
+    if (newValue.text.isEmpty) {
+      return newValue;
+    }
+
+    final oldDigits = oldValue.text.replaceAll(RegExp(r'\D'), '');
+    var newDigits = newValue.text.replaceAll(RegExp(r'\D'), '');
+
+    // 2. Если нажат Backspace и удален спецсимвол (скобка, дефис, пробел),
+    // кол-во цифр не изменилось — принудительно удаляем последнюю цифру
+    if (newValue.text.length < oldValue.text.length && oldDigits == newDigits) {
+      if (newDigits.isNotEmpty) {
+        newDigits = newDigits.substring(0, newDigits.length - 1);
+      }
+    }
+
+    // 3. Если цифр больше нет — полностью очищаем поле
+    if (newDigits.isEmpty) {
+
+      return const TextEditingValue(
+        text: '',
+        selection: TextSelection.collapsed(offset: 0),
+      );
+    }
+
+    // Убираем префикс 7 или 8, так как '+7 ' добавляется автоматически
+    if (newDigits.startsWith('7') || newDigits.startsWith('8')) {
+      newDigits = newDigits.substring(1);
+    }
+
+    // Ограничиваем максимум 10 цифрами после +7
+    if (newDigits.length > 10) {
+      newDigits = newDigits.substring(0, 10);
+    }
+
+    final buffer = StringBuffer('+7 ');
+    if (newDigits.isNotEmpty) {
+      buffer.write('(');
+      buffer.write(newDigits.substring(0, newDigits.length >= 3 ? 3 : newDigits.length));
+      if (newDigits.length >= 3) {
+        buffer.write(') ');
+        buffer.write(newDigits.substring(3, newDigits.length >= 6 ? 6 : newDigits.length));
+      }
+      if (newDigits.length >= 6) {
+        buffer.write('-');
+        buffer.write(newDigits.substring(6, newDigits.length >= 8 ? 8 : newDigits.length));
+      }
+      if (newDigits.length >= 8) {
+        buffer.write('-');
+        buffer.write(newDigits.substring(8, newDigits.length >= 10 ? 10 : newDigits.length));
+      }
+    }
+
+    final formatted = buffer.toString();
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "taxi-esil",
+          "appId": "1:416483778124:android:82418192851dc65ca41ee9",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "taxi-esil",
+          "configurations": {
+            "android": "1:416483778124:android:82418192851dc65ca41ee9",
+            "ios": "1:416483778124:ios:82747d59e6d9c2cda41ee9",
+            "macos": "1:416483778124:ios:82747d59e6d9c2cda41ee9",
+            "web": "1:416483778124:web:b3d88d9cdc52f1daa41ee9",
+            "windows": "1:416483778124:web:8aba5218e9d4e7e7a41ee9"
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "disallowLegacyRuntimeConfig": true,
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "predeploy": [
+        "functions/predeploy.cmd"
+      ]
+    }
+  ],
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "database": {
+    "rules": "database.rules.json"
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "database": {
+      "port": 9000
+    },
+    "functions": {
+      "port": 5001
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4000
+    },
+    "singleProjectMode": true
+  }
+}
