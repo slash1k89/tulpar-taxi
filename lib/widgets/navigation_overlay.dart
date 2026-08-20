@@ -163,7 +163,7 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
                   children: [
                     Text(
                       _isRecalculating
-                          ? 'Р СџР ВµРЎР‚Р ВµРЎР‚Р В°РЎРѓРЎвЂЎР ВµРЎвЂљ...'
+                          ? 'Перерасчёт...'
                           : (_distanceToNextStep > 1000
                                 ? '${(_distanceToNextStep / 1000).toStringAsFixed(1)} Р С”Р С'
                                 : '${_distanceToNextStep.toInt()} Р С'),
@@ -175,10 +175,10 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
                     ),
                     Text(
                       _isRecalculating
-                          ? 'Р вЂ™РЎвЂ№ РЎРѓР В±Р С‘Р В»Р С‘РЎРѓРЎРЉ РЎРѓ Р СР В°РЎР‚РЎв‚¬РЎР‚РЎС“РЎвЂљР В°'
+                          ? 'Вы сбились с маршрута'
                           : (step.streetName.isNotEmpty
                                 ? step.streetName
-                                : 'Р РЋР В»Р ВµР Т‘РЎС“Р в„–РЎвЂљР Вµ Р С—Р С• Р СР В°РЎР‚РЎв‚¬РЎР‚РЎС“РЎвЂљРЎС“'),
+                                : 'Следуйте по маршруту'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Colors.grey, fontSize: 14),

@@ -72,7 +72,7 @@ class DriverProfile {
 
     if (userId.isEmpty || status == null) {
       throw const DriverProfileException(
-        'РЎР‚Р С•РЎвЂћР С‘Р В»РЎРЉ Р Р†Р С•Р Т‘Р С‘РЎвЂљР ВµР В»РЎРЏ Р С—Р С•Р Р†РЎР‚Р ВµР В¶Р Т‘РЎвЂР Р…. Р В±РЎР‚Р В°РЎвЂљР С‘РЎвЂљР ВµРЎРѓРЎРЉ Р С” Р В°Р Т‘Р СР С‘Р Р…Р С‘РЎРѓРЎвЂљРЎР‚Р В°РЎвЂљР С•РЎР‚РЎС“.',
+        'Профиль водителя поврежден. Обратитесь к администратору.',
       );
     }
 
@@ -96,8 +96,8 @@ class DriverProfile {
       'draft' => DriverProfileStatus.draft,
       'pending' => DriverProfileStatus.pending,
 
-      // VPS Р С‘РЎРѓР С—Р С•Р В»РЎРЉР В·РЎС“Р ВµРЎвЂљ active,
-      // Р В° Flutter UI Р С‘РЎРѓРЎвЂљР С•РЎР‚Р С‘РЎвЂЎР ВµРЎРѓР С”Р С‘ Р С•Р В¶Р С‘Р Т‘Р В°Р ВµРЎвЂљ approved.
+      // VPS использует статус active,
+      // а Flutter UI исторически ожидает approved.
       'active' => DriverProfileStatus.approved,
       'approved' => DriverProfileStatus.approved,
 
@@ -184,7 +184,7 @@ class ApiDriverProfileRepository implements DriverProfileRepository {
   Future<void> acceptCurrentAgreement(String userId) async {
     if (userId.trim().isEmpty) {
       throw const DriverProfileException(
-        'Р С•Р в„–Р Т‘Р С‘РЎвЂљР Вµ Р Р† Р В°Р С”Р С”Р В°РЎС“Р Р…РЎвЂљ, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р Р†Р С”Р В»РЎР‹РЎвЂЎР С‘РЎвЂљРЎРЉ РЎР‚Р ВµР В¶Р С‘Р С Р Р†Р С•Р Т‘Р С‘РЎвЂљР ВµР В»РЎРЏ.',
+        'Войдите в аккаунт, чтобы включить режим водителя.',
       );
     }
 
@@ -206,7 +206,7 @@ class ApiDriverProfileRepository implements DriverProfileRepository {
       try {
         await _localAgreementCache.acceptCurrentAgreement(userId);
       } catch (_) {
-        // Р С•Р С”Р В°Р В»РЎРЉР Р…РЎвЂ№Р в„– Р С”РЎРЊРЎв‚¬ Р Р…Р Вµ РЎРЏР Р†Р В»РЎРЏР ВµРЎвЂљРЎРѓРЎРЏ Р С‘РЎРѓРЎвЂљР С•РЎвЂЎР Р…Р С‘Р С”Р С•Р С Р С‘РЎРѓРЎвЂљР С‘Р Р…РЎвЂ№.
+        // Локальный кэш не является источником истины.
       }
     } on TimeoutException {
       rethrow;
@@ -228,7 +228,7 @@ class ApiDriverProfileRepository implements DriverProfileRepository {
 
     if (userId.trim().isEmpty) {
       throw const DriverProfileException(
-        'Р С•Р в„–Р Т‘Р С‘РЎвЂљР Вµ Р Р† Р В°Р С”Р С”Р В°РЎС“Р Р…РЎвЂљ, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р Р†Р С”Р В»РЎР‹РЎвЂЎР С‘РЎвЂљРЎРЉ РЎР‚Р ВµР В¶Р С‘Р С Р Р†Р С•Р Т‘Р С‘РЎвЂљР ВµР В»РЎРЏ.',
+        'Войдите в аккаунт, чтобы включить режим водителя.',
       );
     }
 
@@ -236,7 +236,7 @@ class ApiDriverProfileRepository implements DriverProfileRepository {
         normalizedColor.isEmpty ||
         normalizedNumber.isEmpty) {
       throw const DriverProfileException(
-        'Р В°Р С—Р С•Р В»Р Р…Р С‘РЎвЂљР Вµ Р СР В°РЎР‚Р С”РЎС“, РЎвЂ Р Р†Р ВµРЎвЂљ Р С‘ Р С–Р С•РЎРѓРЎС“Р Т‘Р В°РЎР‚РЎРѓРЎвЂљР Р†Р ВµР Р…Р Р…РЎвЂ№Р в„– Р Р…Р С•Р СР ВµРЎР‚ Р В°Р Р†РЎвЂљР С•Р СР С•Р В±Р С‘Р В»РЎРЏ.',
+        'Заполните марку, цвет и государственный номер автомобиля.',
       );
     }
 
@@ -257,11 +257,11 @@ class ApiDriverProfileRepository implements DriverProfileRepository {
 
   String _messageForApiError(TulparApiException error) {
     if (error.statusCode == 401) {
-      return 'Р РЋР ВµРЎРѓРЎРѓР С‘РЎРЏ Р В·Р В°Р Р†Р ВµРЎР‚РЎв‚¬Р ВµР Р…Р В°. Р С•Р в„–Р Т‘Р С‘РЎвЂљР Вµ Р Р† Р В°Р С”Р С”Р В°РЎС“Р Р…РЎвЂљ РЎРѓР Р…Р С•Р Р†Р В°.';
+      return 'Сессия завершена. Войдите в аккаунт снова.';
     }
 
     if (error.statusCode == 404) {
-      return 'РЎР‚Р С•РЎвЂћР С‘Р В»РЎРЉ Р Р†Р С•Р Т‘Р С‘РЎвЂљР ВµР В»РЎРЏ Р Р…Р Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р….';
+      return 'Профиль водителя не найден.';
     }
 
     if (error.statusCode == 409) {
@@ -269,14 +269,14 @@ class ApiDriverProfileRepository implements DriverProfileRepository {
     }
 
     if (error.statusCode >= 500) {
-      return 'Р РЋР ВµРЎР‚Р Р†Р ВµРЎР‚ Р Р†РЎР‚Р ВµР СР ВµР Р…Р Р…Р С• Р Р…Р ВµР Т‘Р С•РЎРѓРЎвЂљРЎС“Р С—Р ВµР Р…. Р С•Р С—РЎР‚Р С•Р В±РЎС“Р в„–РЎвЂљР Вµ Р ВµРЎвЂ°РЎвЂ РЎР‚Р В°Р В·.';
+      return 'Сервер временно недоступен. Попробуйте ещё раз.';
     }
 
     return error.message;
   }
 }
 
-// РЎРѓРЎвЂљР В°Р Р†Р В»РЎРЏР ВµР С РЎРѓРЎвЂљР В°РЎР‚Р С•Р Вµ Р С‘Р СРЎРЏ, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р Р…Р Вµ Р С—Р ВµРЎР‚Р ВµР Т‘Р ВµР В»РЎвЂ№Р Р†Р В°РЎвЂљРЎРЉ РЎРЊР С”РЎР‚Р В°Р Р… Р С•Р Р…Р В±Р С•РЎР‚Р Т‘Р С‘Р Р…Р С–Р В° Р С‘ РЎвЂљР ВµРЎРѓРЎвЂљРЎвЂ№.
+// Оставляем старое имя, чтобы не переделывать экран онбординга.
 class FirebaseDriverProfileRepository extends ApiDriverProfileRepository {
   FirebaseDriverProfileRepository({super.apiClient, super.localAgreementCache});
 }

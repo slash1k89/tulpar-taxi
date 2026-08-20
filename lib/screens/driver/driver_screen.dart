@@ -585,9 +585,7 @@ class _DriverScreenState extends State<DriverScreen> {
                     foregroundColor: Colors.amber,
                   ),
                   child: Text(
-                    pendingOffer == null
-                        ? 'Предложить цену'
-                        : 'РР·РјРµРЅРёС‚СЊ С†РµРЅСѓ',
+                    pendingOffer == null ? 'Предложить цену' : 'Изменить цену',
                   ),
                 ),
                 ElevatedButton(

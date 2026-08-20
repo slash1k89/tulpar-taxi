@@ -1,4 +1,4 @@
-﻿import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import 'order_price_service.dart';
 import 'tulpar_api_client.dart';
@@ -69,7 +69,7 @@ class DriverOffer {
       driverName:
           (read('driverName', 'driver_name') ?? driverRead('name'))
               ?.toString() ??
-          'Р вЂ™Р С•Р Т‘Р С‘РЎвЂљР ВµР В»РЎРЉ',
+          'Водитель',
       driverPhone:
           (read('driverPhone', 'driver_phone') ?? driverRead('phone'))
               ?.toString() ??
@@ -165,9 +165,7 @@ class OrderOfferService {
     _requireUser();
 
     if (price <= 0 || price > OrderPriceService.maximumOrderPrice) {
-      throw const OrderOfferException(
-        'Р Р€Р С”Р В°Р В¶Р С‘РЎвЂљР Вµ Р С”Р С•РЎР‚РЎР‚Р ВµР С”РЎвЂљР Р…РЎС“РЎР‹ РЎвЂ Р ВµР Р…РЎС“.',
-      );
+      throw const OrderOfferException('Укажите корректную цену.');
     }
 
     try {
@@ -199,7 +197,7 @@ class OrderOfferService {
 
       if (offerId == null || offerId.isEmpty) {
         throw const OrderOfferException(
-          'РЎР‚Р ВµР Т‘Р В»Р С•Р В¶Р ВµР Р…Р С‘Р Вµ Р Р†Р С•Р Т‘Р С‘РЎвЂљР ВµР В»РЎРЏ Р В±Р С•Р В»РЎРЉРЎв‚¬Р Вµ Р Р…Р ВµР Т‘Р С•РЎРѓРЎвЂљРЎС“Р С—Р Р…Р С•.',
+          'Предложение водителя больше недоступно.',
         );
       }
 
@@ -214,13 +212,13 @@ class OrderOfferService {
   static void validateOfferPrice(int price, {required int passengerPrice}) {
     if (price <= passengerPrice) {
       throw const OrderOfferException(
-        'РЎР‚Р ВµР Т‘Р В»Р С•Р В¶Р ВµР Р…Р С‘Р Вµ Р Р†Р С•Р Т‘Р С‘РЎвЂљР ВµР В»РЎРЏ Р Т‘Р С•Р В»Р В¶Р Р…Р С• Р В±РЎвЂ№РЎвЂљРЎРЉ Р Р†РЎвЂ№РЎв‚¬Р Вµ РЎвЂ Р ВµР Р…РЎвЂ№ Р С—Р В°РЎРѓРЎРѓР В°Р В¶Р С‘РЎР‚Р В°.',
+        'Предложение водителя должно быть выше цены пассажира.',
       );
     }
 
     if (price > OrderPriceService.maximumOrderPrice) {
       throw const OrderOfferException(
-        'Р В¦Р ВµР Р…Р В° Р С—РЎР‚Р ВµР Т‘Р В»Р С•Р В¶Р ВµР Р…Р С‘РЎРЏ Р Р…Р Вµ Р СР С•Р В¶Р ВµРЎвЂљ Р С—РЎР‚Р ВµР Р†РЎвЂ№РЎв‚¬Р В°РЎвЂљРЎРЉ 1 000 000 РІвЂљС‘.',
+        'Цена предложения не может превышать 1 000 000 ₸.',
       );
     }
   }
@@ -229,9 +227,7 @@ class OrderOfferService {
     final user = _auth.currentUser;
 
     if (user == null) {
-      throw const OrderOfferException(
-        'Р С•Р в„–Р Т‘Р С‘РЎвЂљР Вµ Р Р† Р В°Р С”Р С”Р В°РЎС“Р Р…РЎвЂљ, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р С—РЎР‚Р С•Р Т‘Р С•Р В»Р В¶Р С‘РЎвЂљРЎРЉ.',
-      );
+      throw const OrderOfferException('Войдите в аккаунт, чтобы продолжить.');
     }
 
     return user;
@@ -242,15 +238,15 @@ class OrderOfferService {
       case 400:
         return error.message;
       case 401:
-        return 'Р С•Р в„–Р Т‘Р С‘РЎвЂљР Вµ Р Р† Р В°Р С”Р С”Р В°РЎС“Р Р…РЎвЂљ, РЎвЂЎРЎвЂљР С•Р В±РЎвЂ№ Р С—РЎР‚Р С•Р Т‘Р С•Р В»Р В¶Р С‘РЎвЂљРЎРЉ.';
+        return 'Войдите в аккаунт, чтобы продолжить.';
       case 403:
-        return 'Р ВµР Т‘Р С•РЎРѓРЎвЂљР В°РЎвЂљР С•РЎвЂЎР Р…Р С• Р С—РЎР‚Р В°Р Р† Р Т‘Р В»РЎРЏ РЎРЊРЎвЂљР С•Р С–Р С• Р Т‘Р ВµР в„–РЎРѓРЎвЂљР Р†Р С‘РЎРЏ.';
+        return 'Недостаточно прав для этого действия.';
       case 404:
-        return 'Р В°Р С”Р В°Р В· Р С‘Р В»Р С‘ Р С—РЎР‚Р ВµР Т‘Р В»Р С•Р В¶Р ВµР Р…Р С‘Р Вµ Р В±Р С•Р В»РЎРЉРЎв‚¬Р Вµ Р Р…Р Вµ РЎРѓРЎС“РЎвЂ°Р ВµРЎРѓРЎвЂљР Р†РЎС“Р ВµРЎвЂљ.';
+        return 'Заказ или предложение больше не существует.';
       case 409:
         return error.message;
       default:
-        return 'Р Вµ РЎС“Р Т‘Р В°Р В»Р С•РЎРѓРЎРЉ Р С•Р В±РЎР‚Р В°Р В±Р С•РЎвЂљР В°РЎвЂљРЎРЉ Р С—РЎР‚Р ВµР Т‘Р В»Р С•Р В¶Р ВµР Р…Р С‘Р Вµ. Р С•Р С—РЎР‚Р С•Р В±РЎС“Р в„–РЎвЂљР Вµ Р ВµРЎвЂ°РЎвЂ РЎР‚Р В°Р В·.';
+        return 'Не удалось обработать предложение. Попробуйте ещё раз.';
     }
   }
 }

@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 import '../models/address_suggestion.dart';
 
 class GeocodingService {
-  // 1. Р СџР С•Р С‘РЎРѓР С” Р С—Р С•Р Т‘РЎРѓР С”Р В°Р В·Р С•Р С” Р С—РЎР‚Р С‘ РЎР‚РЎС“РЎвЂЎР Р…Р С•Р С Р Р†Р Р†Р С•Р Т‘Р Вµ
+  // 1. Поиск подсказок при ручном вводе
   static Future<List<AddressSuggestion>> searchAddress({
     required String query,
     required String cityName,
@@ -14,7 +14,7 @@ class GeocodingService {
     final cleanQuery = query.trim();
     if (cleanQuery.length < 2) return [];
 
-    // Р Р€РЎР‚Р С•Р Р†Р ВµР Р…РЎРЉ 1: Р СџР С•Р С‘РЎРѓР С” РЎвЂЎР ВµРЎР‚Р ВµР В· Photon (РЎвЂЎР С‘РЎРѓРЎвЂљРЎвЂ№Р в„– РЎвЂљР ВµР С”РЎРѓРЎвЂљ query + Р С–Р ВµР С•-Р С—РЎР‚Р С‘Р С•РЎР‚Р С‘РЎвЂљР ВµРЎвЂљ Р С—Р С• lat/lon)
+    // Уровень 1: поиск через Photon (текстовый запрос + геоприоритет по lat/lon)
     try {
       final String urlStr =
           'https://photon.komoot.io/api/?q=${Uri.encodeComponent(cleanQuery)}'
@@ -73,7 +73,7 @@ class GeocodingService {
       debugPrint('Photon Search Exception: $e');
     }
 
-    // Р Р€РЎР‚Р С•Р Р†Р ВµР Р…РЎРЉ 2: Р В¤Р С•Р В»Р В±РЎРЊР С” Р Р…Р В° Nominatim, Р ВµРЎРѓР В»Р С‘ Photon Р Р†Р ВµРЎР‚Р Р…РЎС“Р В» 0 РЎР‚Р ВµР В·РЎС“Р В»РЎРЉРЎвЂљР В°РЎвЂљР С•Р Р†
+    // Уровень 2: fallback на Nominatim, если Photon вернул 0 результатов
     try {
       final searchQuery = '$cleanQuery, $cityName';
       final Uri nominatimUrl = Uri.parse(
@@ -122,7 +122,7 @@ class GeocodingService {
     return [];
   }
 
-  // 2. Р С›Р В±РЎР‚Р В°РЎвЂљР Р…Р С•Р Вµ Р С–Р ВµР С•Р С”Р С•Р Т‘Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р С‘Р Вµ (Р С™Р В»Р С‘Р С” Р Р…Р В° Р С”Р В°РЎР‚РЎвЂљР Вµ -> Р С’Р Т‘РЎР‚Р ВµРЎРѓ)
+  // 2. Обратное геокодирование (клик на карте -> адрес)
   static Future<String> reverseGeocode(double lat, double lng) async {
     try {
       final Uri photonUrl = Uri.parse(
@@ -202,6 +202,6 @@ class GeocodingService {
       debugPrint('Nominatim Reverse Exception: $e');
     }
 
-    return 'Р СћР С•РЎвЂЎР С”Р В° Р Р…Р В° Р С”Р В°РЎР‚РЎвЂљР Вµ (${lat.toStringAsFixed(3)}, ${lng.toStringAsFixed(3)})';
+    return 'Точка на карте (${lat.toStringAsFixed(3)}, ${lng.toStringAsFixed(3)})';
   }
 }

@@ -28,10 +28,7 @@ class TulparApiClient {
     final user = _auth.currentUser;
 
     if (user == null) {
-      throw const TulparApiException(
-        401,
-        'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ Р°РІС‚РѕСЂРёР·РѕРІР°РЅ.',
-      );
+      throw const TulparApiException(401, 'Пользователь не авторизован.');
     }
 
     final token = await user.getIdToken();
@@ -39,7 +36,7 @@ class TulparApiClient {
     if (token == null || token.isEmpty) {
       throw const TulparApiException(
         401,
-        'РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ С‚РѕРєРµРЅ Р°РІС‚РѕСЂРёР·Р°С†РёРё.',
+        'Не удалось получить токен авторизации.',
       );
     }
 
@@ -70,7 +67,7 @@ class TulparApiClient {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw TulparApiException(
         response.statusCode,
-        body['error']?.toString() ?? 'РћС€РёР±РєР° СЃРµСЂРІРµСЂР°',
+        body['error']?.toString() ?? 'Ошибка сервера',
         data: body,
       );
     }
