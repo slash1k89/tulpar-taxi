@@ -2,6 +2,10 @@ rules_version = '2';
 
 // Tulpar Taxi data model:
 // - users contains private profile data (including phone); only its owner may read it.
+// - driver_profiles contains a user's driver application and protected approval state.
+//   Required fields: userId, status, carModel, carColor, carNumber,
+//   agreementVersion, agreementAcceptedAt, subscriptionStatus,
+//   subscriptionValidUntil, createdAt, updatedAt.
 // - orders contains the two participants and the ride state.
 // - order messages belong only to the order participants.
 service cloud.firestore {
@@ -44,6 +48,81 @@ service cloud.firestore {
              (!('carNumber' in request.resource.data) || isShortString(request.resource.data.carNumber, 20));
     }
 
+    function isBoundedString(value, maximumLength) {
+      return value is string && value.size() <= maximumLength;
+    }
+
+    function isValidDriverStatus(status) {
+      return status == 'draft' || status == 'pending' ||
+             status == 'approved' || status == 'suspended';
+    }
+
+    function hasCompleteDriverVehicle(data) {
+      return isShortString(data.carModel, 80) &&
+             isShortString(data.carColor, 40) &&
+             isShortString(data.carNumber, 20);
+    }
+
+    function isValidDriverProfile(data, userId) {
+      return data.keys().hasOnly([
+               'userId', 'status', 'carModel', 'carColor', 'carNumber',
+               'agreementVersion', 'agreementAcceptedAt',
+               'subscriptionStatus', 'subscriptionValidUntil',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasAll([
+               'userId', 'status', 'carModel', 'carColor', 'carNumber',
+               'agreementVersion', 'agreementAcceptedAt',
+               'subscriptionStatus', 'subscriptionValidUntil',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.userId == userId &&
+             isValidDriverStatus(data.status) &&
+             isBoundedString(data.carModel, 80) &&
+             isBoundedString(data.carColor, 40) &&
+             isBoundedString(data.carNumber, 20) &&
+             isShortString(data.agreementVersion, 20) &&
+             data.agreementAcceptedAt is timestamp &&
+             (data.subscriptionStatus == 'inactive' ||
+              data.subscriptionStatus == 'active' ||
+              data.subscriptionStatus == 'expired') &&
+             (data.subscriptionValidUntil == null ||
+              data.subscriptionValidUntil is timestamp) &&
+             data.createdAt is timestamp &&
+             data.updatedAt is timestamp &&
+             (data.status == 'draft' || hasCompleteDriverVehicle(data));
+    }
+
+    function isValidNewDriverProfile(userId) {
+      return isValidDriverProfile(request.resource.data, userId) &&
+             request.resource.data.status == 'draft' &&
+             request.resource.data.agreementAcceptedAt == request.time &&
+             request.resource.data.subscriptionStatus == 'inactive' &&
+             request.resource.data.subscriptionValidUntil == null &&
+             request.resource.data.createdAt == request.time &&
+             request.resource.data.updatedAt == request.time;
+    }
+
+    function isValidDriverProfileOwnerUpdate(userId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return isValidDriverProfile(request.resource.data, userId) &&
+             changed.hasOnly([
+               'status', 'carModel', 'carColor', 'carNumber',
+               'agreementVersion', 'agreementAcceptedAt', 'updatedAt'
+             ]) &&
+             request.resource.data.userId == resource.data.userId &&
+             request.resource.data.createdAt == resource.data.createdAt &&
+             request.resource.data.subscriptionStatus == resource.data.subscriptionStatus &&
+             request.resource.data.subscriptionValidUntil == resource.data.subscriptionValidUntil &&
+             request.resource.data.updatedAt == request.time &&
+             (request.resource.data.status == resource.data.status ||
+              (resource.data.status == 'draft' &&
+               request.resource.data.status == 'pending' &&
+               hasCompleteDriverVehicle(request.resource.data))) &&
+             (!changed.hasAny(['agreementVersion', 'agreementAcceptedAt']) ||
+              request.resource.data.agreementAcceptedAt == request.time);
+    }
+
     function isParticipant(order) {
       return signedIn() &&
              (order.passengerId == request.auth.uid || order.driverId == request.auth.uid);
@@ -76,18 +155,40 @@ service cloud.firestore {
     }
 
     function activeBindingsMatchStatusAfter(orderId, status) {
-      return (!exists(/databases/$(database)/documents/active_orders/$(resource.data.passengerId)) ||
-              hasActiveBindingAfter(resource.data.passengerId, orderId, 'passenger', status)) &&
-             (!exists(/databases/$(database)/documents/active_orders/$(resource.data.driverId)) ||
-              hasActiveBindingAfter(resource.data.driverId, orderId, 'driver', status));
+      return hasActiveBindingAfter(resource.data.passengerId, orderId, 'passenger', status) &&
+             hasActiveBindingAfter(resource.data.driverId, orderId, 'driver', status);
     }
 
     function currentUser() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
-    function isDriver() {
-      return signedIn() && currentUser().role == 'driver';
+    function userFor(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data;
+    }
+
+    function currentDriverProfile() {
+      return get(/databases/$(database)/documents/driver_profiles/$(request.auth.uid)).data;
+    }
+
+    function driverProfileFor(userId) {
+      return get(/databases/$(database)/documents/driver_profiles/$(userId)).data;
+    }
+
+    function isApprovedDriver() {
+      return signedIn() &&
+             exists(/databases/$(database)/documents/driver_profiles/$(request.auth.uid)) &&
+             currentDriverProfile().status == 'approved';
+    }
+
+    function isApprovedDriverId(userId) {
+      return signedIn() &&
+             exists(/databases/$(database)/documents/driver_profiles/$(userId)) &&
+             driverProfileFor(userId).status == 'approved';
+    }
+
+    function passengerPriceOf(order) {
+      return ('passengerPrice' in order) ? order.passengerPrice : order.price;
     }
 
     function orderDocument(orderId) {
@@ -105,30 +206,112 @@ service cloud.firestore {
              request.resource.data.carModel is string &&
              request.resource.data.carModel.size() <= 80 &&
              request.resource.data.carColor is string &&
+             request.resource.data.carColor.size() > 0 &&
              request.resource.data.carColor.size() <= 40 &&
              request.resource.data.carNumber is string &&
+             request.resource.data.carNumber.size() > 0 &&
              request.resource.data.carNumber.size() <= 20 &&
-             (!('carModel' in currentUser()) || request.resource.data.carModel == currentUser().carModel) &&
-             (!('carColor' in currentUser()) || request.resource.data.carColor == currentUser().carColor) &&
-             (!('carNumber' in currentUser()) || request.resource.data.carNumber == currentUser().carNumber);
+             request.resource.data.carModel.size() > 0 &&
+             request.resource.data.carModel == currentDriverProfile().carModel &&
+             request.resource.data.carColor == currentDriverProfile().carColor &&
+             request.resource.data.carNumber == currentDriverProfile().carNumber;
     }
 
     function isDriverAcceptance(orderId) {
-      return isDriver() && resource.data.status == 'searching' &&
+      return isApprovedDriver() && resource.data.status == 'searching' &&
              !exists(/databases/$(database)/documents/active_orders/$(request.auth.uid)) &&
              request.resource.data.status == 'accepted' &&
              request.resource.data.diff(resource.data).affectedKeys().hasOnly([
                'driverId', 'driverName', 'driverPhone', 'carModel', 'carColor',
-               'carNumber', 'status', 'acceptedAt'
+               'carNumber', 'passengerPrice', 'agreedPrice', 'price',
+               'status', 'acceptedAt'
              ]) &&
+             passengerPriceOf(resource.data) is int &&
+             request.resource.data.passengerPrice == passengerPriceOf(resource.data) &&
+             request.resource.data.agreedPrice == passengerPriceOf(resource.data) &&
+             request.resource.data.price == passengerPriceOf(resource.data) &&
              request.resource.data.acceptedAt == request.time && isDriverSnapshot() &&
              hasActiveBindingAfter(request.auth.uid, orderId, 'driver', 'accepted') &&
-             (!exists(/databases/$(database)/documents/active_orders/$(resource.data.passengerId)) ||
-              hasActiveBindingAfter(resource.data.passengerId, orderId, 'passenger', 'accepted'));
+             hasActiveBindingAfter(resource.data.passengerId, orderId, 'passenger', 'accepted');
+    }
+
+    function offerDocument(orderId, driverId) {
+      return get(/databases/$(database)/documents/orders/$(orderId)/offers/$(driverId)).data;
+    }
+
+    function acceptedOfferAfter(orderId, driverId) {
+      return existsAfter(/databases/$(database)/documents/orders/$(orderId)/offers/$(driverId)) &&
+             getAfter(/databases/$(database)/documents/orders/$(orderId)/offers/$(driverId)).data.status == 'accepted' &&
+             getAfter(/databases/$(database)/documents/orders/$(orderId)/offers/$(driverId)).data.updatedAt == request.time;
+    }
+
+    function isValidOffer(data, driverId) {
+      return data.keys().hasOnly([
+               'driverId', 'price', 'status', 'driverName', 'driverPhone',
+               'carModel', 'carColor', 'carNumber', 'driverRating',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.keys().hasAll([
+               'driverId', 'price', 'status', 'driverName', 'driverPhone',
+               'carModel', 'carColor', 'carNumber', 'driverRating',
+               'createdAt', 'updatedAt'
+             ]) &&
+             data.driverId == driverId &&
+             data.price is int && data.price > 0 && data.price <= 1000000 &&
+             (data.status == 'pending' || data.status == 'accepted' ||
+              data.status == 'rejected' || data.status == 'withdrawn') &&
+             isShortString(data.driverName, 80) &&
+             isShortString(data.driverPhone, 20) &&
+             isShortString(data.carModel, 80) &&
+             isShortString(data.carColor, 40) &&
+             isShortString(data.carNumber, 20) &&
+             data.driverRating is number && data.driverRating >= 0 && data.driverRating <= 5 &&
+             data.createdAt is timestamp && data.updatedAt is timestamp;
+    }
+
+    function isTrustedOfferSnapshot(data, driverId) {
+      return exists(/databases/$(database)/documents/users/$(driverId)) &&
+             data.driverName == userFor(driverId).name &&
+             data.driverPhone == userFor(driverId).phone &&
+             data.driverRating == userFor(driverId).rating &&
+             data.carModel == driverProfileFor(driverId).carModel &&
+             data.carColor == driverProfileFor(driverId).carColor &&
+             data.carNumber == driverProfileFor(driverId).carNumber;
+    }
+
+    function isPassengerOfferAcceptance(orderId) {
+      let driverId = request.resource.data.driverId;
+      let offer = offerDocument(orderId, driverId);
+      return signedIn() && resource.data.passengerId == request.auth.uid &&
+             resource.data.status == 'searching' &&
+             driverId is string && driverId.size() > 0 &&
+             isApprovedDriverId(driverId) &&
+             !exists(/databases/$(database)/documents/active_orders/$(driverId)) &&
+             offer.driverId == driverId && offer.status == 'pending' &&
+             offer.price is int && offer.price > passengerPriceOf(resource.data) &&
+             offer.price <= 1000000 &&
+             request.resource.data.status == 'accepted' &&
+             request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+               'driverId', 'driverName', 'driverPhone', 'carModel', 'carColor',
+               'carNumber', 'passengerPrice', 'agreedPrice', 'price',
+               'status', 'acceptedAt'
+             ]) &&
+             request.resource.data.driverName == offer.driverName &&
+             request.resource.data.driverPhone == offer.driverPhone &&
+             request.resource.data.carModel == offer.carModel &&
+             request.resource.data.carColor == offer.carColor &&
+             request.resource.data.carNumber == offer.carNumber &&
+             request.resource.data.passengerPrice == passengerPriceOf(resource.data) &&
+             request.resource.data.agreedPrice == offer.price &&
+             request.resource.data.price == offer.price &&
+             request.resource.data.acceptedAt == request.time &&
+             acceptedOfferAfter(orderId, driverId) &&
+             hasActiveBindingAfter(driverId, orderId, 'driver', 'accepted') &&
+             hasActiveBindingAfter(resource.data.passengerId, orderId, 'passenger', 'accepted');
     }
 
     function isDriverStatusTransition(orderId) {
-      return isDriver() && resource.data.driverId == request.auth.uid && (
+      return isApprovedDriver() && resource.data.driverId == request.auth.uid && (
         (resource.data.status == 'accepted' && request.resource.data.status == 'arrived' &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'arrivedAt']) &&
          request.resource.data.arrivedAt == request.time && activeBindingsMatchStatusAfter(orderId, 'arrived')) ||
@@ -166,13 +349,18 @@ service cloud.firestore {
     function isValidNewOrder(orderId) {
       return request.resource.data.keys().hasOnly([
                'passengerId', 'fromAddress', 'toAddress', 'price', 'fromLat',
-               'fromLng', 'toLat', 'toLng', 'status', 'createdAt'
+               'fromLng', 'toLat', 'toLng', 'status', 'createdAt',
+               'passengerPrice', 'agreedPrice'
              ]) &&
              request.resource.data.passengerId == request.auth.uid &&
              isShortString(request.resource.data.fromAddress, 300) &&
              isShortString(request.resource.data.toAddress, 300) &&
              request.resource.data.price is int && request.resource.data.price > 0 &&
              request.resource.data.price <= 1000000 &&
+             ((!('passengerPrice' in request.resource.data) &&
+               !('agreedPrice' in request.resource.data)) ||
+              (request.resource.data.passengerPrice == request.resource.data.price &&
+               request.resource.data.agreedPrice == null)) &&
              request.resource.data.fromLat is number && request.resource.data.fromLat >= -90 && request.resource.data.fromLat <= 90 &&
              request.resource.data.fromLng is number && request.resource.data.fromLng >= -180 && request.resource.data.fromLng <= 180 &&
              request.resource.data.toLat is number && request.resource.data.toLat >= -90 && request.resource.data.toLat <= 90 &&
@@ -209,13 +397,22 @@ service cloud.firestore {
       }
     }
 
+    match /driver_profiles/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow create: if isOwner(userId) && isValidNewDriverProfile(userId);
+      allow update: if isOwner(userId) &&
+        isValidDriverProfileOwnerUpdate(userId);
+      allow delete: if false;
+    }
+
     // Exactly one active-order binding per user. It is written in the same
     // transaction as the order state change and removed only on a terminal
     // state transition. Legacy orders without this document are read-only.
     match /active_orders/{userId} {
       allow get: if isOwner(userId);
       allow list: if false;
-      allow create: if isOwner(userId) &&
+      allow create: if signedIn() &&
         request.resource.data.keys().hasOnly(['orderId', 'role', 'status', 'createdAt']) &&
         request.resource.data.orderId is string && request.resource.data.orderId.size() > 0 &&
         (request.resource.data.role == 'passenger' || request.resource.data.role == 'driver') &&
@@ -223,12 +420,19 @@ service cloud.firestore {
         request.resource.data.createdAt == request.time &&
         existsAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)) &&
         getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.status == request.resource.data.status &&
-        ((request.resource.data.role == 'passenger' &&
-          getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.passengerId == userId &&
-          getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.createdAt == request.resource.data.createdAt) ||
-         (request.resource.data.role == 'driver' && isDriver() &&
-          getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.driverId == userId &&
-          getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.acceptedAt == request.resource.data.createdAt));
+        (request.resource.data.role == 'passenger'
+          ? (isOwner(userId) &&
+             getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.passengerId == userId &&
+             getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.createdAt == request.resource.data.createdAt)
+          : ((isOwner(userId) && isApprovedDriver() &&
+             ('acceptedAt' in getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data) &&
+             getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.driverId == userId &&
+             getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.acceptedAt == request.resource.data.createdAt) ||
+             (getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.passengerId == request.auth.uid &&
+              getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.driverId == userId &&
+              getAfter(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.acceptedAt == request.resource.data.createdAt &&
+              isApprovedDriverId(userId) &&
+              acceptedOfferAfter(request.resource.data.orderId, userId))));
       allow update: if signedIn() &&
         resource.data.keys().hasOnly(['orderId', 'role', 'status', 'createdAt']) &&
         request.resource.data.keys().hasOnly(['orderId', 'role', 'status', 'createdAt']) &&
@@ -239,8 +443,14 @@ service cloud.firestore {
         isActiveStatus(request.resource.data.status) &&
         existsAfter(/databases/$(database)/documents/orders/$(resource.data.orderId)) &&
         getAfter(/databases/$(database)/documents/orders/$(resource.data.orderId)).data.status == request.resource.data.status &&
-        isDriver() &&
-        getAfter(/databases/$(database)/documents/orders/$(resource.data.orderId)).data.driverId == request.auth.uid;
+        ((isApprovedDriver() &&
+          getAfter(/databases/$(database)/documents/orders/$(resource.data.orderId)).data.driverId == request.auth.uid) ||
+         (isOwner(userId) && resource.data.role == 'passenger' &&
+          getAfter(/databases/$(database)/documents/orders/$(resource.data.orderId)).data.passengerId == request.auth.uid &&
+          acceptedOfferAfter(
+            resource.data.orderId,
+            getAfter(/databases/$(database)/documents/orders/$(resource.data.orderId)).data.driverId
+          )));
       allow delete: if signedIn() &&
         resource.data.keys().hasOnly(['orderId', 'role', 'status', 'createdAt']) &&
         resource.data.orderId is string &&
@@ -252,10 +462,11 @@ service cloud.firestore {
     match /orders/{orderId} {
       // Available rides can be queried only with status == 'searching'; once
       // accepted, the document is visible only to its two participants.
-      allow get: if signedIn() && ((resource.data.status == 'searching' && isDriver()) || isParticipant(resource.data));
-      allow list: if signedIn() && ((resource.data.status == 'searching' && isDriver()) || isParticipant(resource.data));
+      allow get: if signedIn() && ((resource.data.status == 'searching' && isApprovedDriver()) || isParticipant(resource.data));
+      allow list: if signedIn() && ((resource.data.status == 'searching' && isApprovedDriver()) || isParticipant(resource.data));
       allow create: if signedIn() && isValidNewOrder(orderId);
-      allow update: if isDriverAcceptance(orderId) || isDriverStatusTransition(orderId) || isPassengerCancellation();
+      allow update: if isDriverAcceptance(orderId) || isPassengerOfferAcceptance(orderId) ||
+        isDriverStatusTransition(orderId) || isPassengerCancellation();
       allow delete: if false;
 
       match /messages/{messageId} {
@@ -268,15 +479,53 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
+      match /offers/{driverId} {
+        allow get: if signedIn() &&
+          (isOwner(driverId) || orderDocument(orderId).passengerId == request.auth.uid);
+        allow list: if signedIn() &&
+          orderDocument(orderId).passengerId == request.auth.uid;
+        allow create: if isOwner(driverId) && isApprovedDriver() &&
+          orderDocument(orderId).status == 'searching' &&
+          !exists(/databases/$(database)/documents/active_orders/$(driverId)) &&
+          isValidOffer(request.resource.data, driverId) &&
+          isTrustedOfferSnapshot(request.resource.data, driverId) &&
+          request.resource.data.status == 'pending' &&
+          request.resource.data.price > passengerPriceOf(orderDocument(orderId)) &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.updatedAt == request.time;
+        allow update: if
+          (isOwner(driverId) && isApprovedDriver() &&
+           orderDocument(orderId).status == 'searching' &&
+           !exists(/databases/$(database)/documents/active_orders/$(driverId)) &&
+           resource.data.status == 'pending' &&
+           request.resource.data.status == 'pending' &&
+           isValidOffer(request.resource.data, driverId) &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['price', 'updatedAt']) &&
+           request.resource.data.price > passengerPriceOf(orderDocument(orderId)) &&
+           request.resource.data.updatedAt == request.time) ||
+          (signedIn() && orderDocument(orderId).passengerId == request.auth.uid &&
+           resource.data.status == 'pending' &&
+           request.resource.data.status == 'accepted' &&
+           isValidOffer(request.resource.data, driverId) &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+           request.resource.data.updatedAt == request.time &&
+           existsAfter(/databases/$(database)/documents/orders/$(orderId)) &&
+           getAfter(/databases/$(database)/documents/orders/$(orderId)).data.status == 'accepted' &&
+           getAfter(/databases/$(database)/documents/orders/$(orderId)).data.driverId == driverId &&
+           getAfter(/databases/$(database)/documents/orders/$(orderId)).data.price == resource.data.price &&
+           getAfter(/databases/$(database)/documents/orders/$(orderId)).data.acceptedAt == request.time);
+        allow delete: if false;
+      }
+
       // One short-lived current location for an active ride. A passenger can
       // read only their assigned driver's point, and only the driver can write
       // it. The update interval is enforced both here and by the client.
       match /tracking/{trackingId} {
         allow get: if trackingId == 'current' && isOrderParticipant(orderId);
         allow list: if false;
-        allow create: if trackingId == 'current' && isDriver() && isActiveAssignedDriver(orderId) &&
+        allow create: if trackingId == 'current' && isApprovedDriver() && isActiveAssignedDriver(orderId) &&
           isValidTrackingLocation();
-        allow update: if trackingId == 'current' && isDriver() && isActiveAssignedDriver(orderId) &&
+        allow update: if trackingId == 'current' && isApprovedDriver() && isActiveAssignedDriver(orderId) &&
           isValidTrackingLocation() &&
           request.time >= resource.data.updatedAt + duration.value(5, 's');
         allow delete: if trackingId == 'current' && isOrderParticipant(orderId) &&

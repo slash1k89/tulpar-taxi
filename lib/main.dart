@@ -1,66 +1,114 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_database/firebase_database.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'firebase_options.dart';
 import 'app_routes.dart';
 import 'screens/auth/login_screen.dart';
-import 'screens/driver/driver_subscription_screen.dart';
+import 'screens/driver/driver_onboarding_screen.dart';
 import 'screens/map/map_screen.dart';
 import 'screens/profile/history_screen.dart';
 import 'screens/profile/profile_screen.dart';
 import 'screens/splash_screen.dart';
 import 'services/push_notification_service.dart';
+import 'services/startup_diagnostics.dart';
 import 'services/theme_service.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 final scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
 const _useFirebaseEmulators = bool.fromEnvironment('USE_FIREBASE_EMULATORS');
-const _useCloudFunctions = bool.fromEnvironment('USE_CLOUD_FUNCTIONS');
 const _emulatorHost = String.fromEnvironment(
   'FIREBASE_EMULATOR_HOST',
   defaultValue: '10.0.2.2',
 );
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  StartupDiagnostics.mark('process start');
 
-  final themeLoad = appThemeController.load();
+  final requiredInitialization = _initializeRequiredServices();
 
+  runApp(TaxiApp(startupInitialization: requiredInitialization));
+  StartupDiagnostics.mark('runApp');
+
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    StartupDiagnostics.mark('first Flutter frame');
+    unawaited(_loadTheme());
+    if (!_useFirebaseEmulators) {
+      unawaited(
+        Future<void>.delayed(
+          const Duration(seconds: 6),
+        ).then((_) => _initializeDeferredServices(requiredInitialization)),
+      );
+    }
+  });
+}
+
+Future<void> _initializeRequiredServices() async {
   try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform.copyWith(
-        databaseURL: 'https://taxi-esil-default-rtdb.firebaseio.com',
-      ),
-    );
-    debugPrint('Firebase успешно инициализирован');
-  } catch (e, stack) {
-    debugPrint('Ошибка при инициализации Firebase: $e');
-    debugPrint(stack.toString());
-  }
+    if (Firebase.apps.isEmpty) {
+      try {
+        await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform.copyWith(
+            databaseURL: 'https://taxi-esil-default-rtdb.firebaseio.com',
+          ),
+        );
+      } on FirebaseException catch (error) {
+        // Android may create the default app from google-services.xml while
+        // the Dart initialization request is already in flight. In that
+        // narrow race the requested app is ready, so verify and reuse it.
+        if (error.code != 'duplicate-app') rethrow;
+        Firebase.app();
+        StartupDiagnostics.mark('Firebase default app reused');
+      }
+    }
+    StartupDiagnostics.mark('Firebase initialized');
 
-  if (_useFirebaseEmulators) {
-    await _connectFirebaseEmulators();
-  } else if (_useCloudFunctions) {
+    if (_useFirebaseEmulators) await _connectFirebaseEmulators();
+  } catch (error, stackTrace) {
+    StartupDiagnostics.error('Firebase initialization failed', error);
+    debugPrintStack(stackTrace: stackTrace);
+    rethrow;
+  }
+}
+
+Future<void> _loadTheme() async {
+  try {
+    await appThemeController.load();
+    StartupDiagnostics.mark('theme preference loaded');
+  } catch (error) {
+    StartupDiagnostics.error('theme preference load failed', error);
+  }
+}
+
+Future<void> _initializeDeferredServices(
+  Future<void> requiredInitialization,
+) async {
+  try {
+    await requiredInitialization;
     await PushNotificationService().initialize(
       navigatorKey: navigatorKey,
       messengerKey: scaffoldMessengerKey,
     );
+    StartupDiagnostics.mark('push notifications initialized');
+  } catch (error) {
+    StartupDiagnostics.error('deferred services failed', error);
   }
-
-  await themeLoad;
-
-  runApp(const TaxiApp());
 }
 
 class TaxiApp extends StatelessWidget {
-  const TaxiApp({super.key, this.themeController, this.home});
+  const TaxiApp({
+    super.key,
+    this.themeController,
+    this.home,
+    this.startupInitialization,
+  });
 
   final ThemeController? themeController;
   final Widget? home;
+  final Future<void>? startupInitialization;
 
   @override
   Widget build(BuildContext context) {
@@ -120,12 +168,12 @@ class TaxiApp extends StatelessWidget {
         ),
         routes: {
           AppRoutes.map: (_) => const MapScreen(),
-          AppRoutes.driverSubscription: (_) => const DriverSubscriptionScreen(),
+          AppRoutes.driverOnboarding: (_) => const DriverOnboardingScreen(),
           AppRoutes.history: (_) => const HistoryScreen(),
           AppRoutes.profile: (_) => const ProfileScreen(),
           AppRoutes.login: (_) => const LoginScreen(),
         },
-        home: home ?? const SplashScreen(),
+        home: home ?? SplashScreen(appInitialization: startupInitialization),
       ),
     );
   }
@@ -169,8 +217,5 @@ ElevatedButtonThemeData _elevatedButtonTheme() {
 
 Future<void> _connectFirebaseEmulators() async {
   await FirebaseAuth.instance.useAuthEmulator(_emulatorHost, 9099);
-  FirebaseFirestore.instance.useFirestoreEmulator(_emulatorHost, 8080);
-  FirebaseDatabase.instance.useDatabaseEmulator(_emulatorHost, 9000);
-  FirebaseFunctions.instance.useFunctionsEmulator(_emulatorHost, 5001);
   debugPrint('Firebase Emulator Suite: $_emulatorHost');
 }

@@ -32,6 +32,7 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+**/node_modules/
 
 # Symbolication related
 app.*.symbols
@@ -55,3 +56,16 @@ app.*.map.json
 # Local source-code archives
 /*.zip
 /*.7z
+
+# Local backup files
+*.bak
+*.bak-*
+*.bak_*
+*-before-vps
+*.bak-before-vps
+
+# Local audit and repair files
+FIRESTORE_ACCEPTANCE_AUDIT.md
+FIRESTORE_DRIVER_PROFILE_AUDIT.md
+FIRESTORE_OFFERS_AUDIT.md
+repair_encoding.ps1

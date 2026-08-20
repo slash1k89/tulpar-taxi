@@ -5,7 +5,10 @@ import '../map/map_screen.dart';
 import '../map/order_tracking_screen.dart';
 import '../driver/driver_map_screen.dart';
 import '../../services/active_order_service.dart';
+import '../../services/user_profile_recovery_service.dart';
+import '../../services/tulpar_api_client.dart';
 import 'register_screen.dart';
+import 'user_profile_recovery_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -25,7 +28,9 @@ class _LoginScreenState extends State<LoginScreen> {
     if (rawPhone.length < 11 || _passwordController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Введите корректный номер телефона и пароль'),
+          content: Text(
+            'Р’РІРµРґРёС‚Рµ РєРѕСЂСЂРµРєС‚РЅС‹Р№ РЅРѕРјРµСЂ С‚РµР»РµС„РѕРЅР° Рё РїР°СЂРѕР»СЊ',
+          ),
           backgroundColor: Colors.amber,
         ),
       );
@@ -35,11 +40,41 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // Авторизация по номеру телефона (привязанному к email под капотом)
+      // РђРІС‚РѕСЂРёР·Р°С†РёСЏ РїРѕ РЅРѕРјРµСЂСѓ С‚РµР»РµС„РѕРЅР° (РїСЂРёРІСЏР·Р°РЅРЅРѕРјСѓ Рє email РїРѕРґ РєР°РїРѕС‚РѕРј)
       await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: '$rawPhone@tulpar.kz',
         password: _passwordController.text.trim(),
       );
+
+      await TulparApiClient().syncCurrentUser(phone: '+$rawPhone');
+
+      UserProfileRecoveryResult? recovery;
+      try {
+        recovery = await UserProfileRecoveryService().inspectAndRepair();
+      } catch (_) {
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const UserProfileRecoveryScreen(),
+            ),
+          );
+        }
+        return;
+      }
+
+      if (!recovery.allowsAppAccess) {
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  UserProfileRecoveryScreen(initialResult: recovery),
+            ),
+          );
+        }
+        return;
+      }
 
       final activeOrder = await ActiveOrderService().findCurrentOrder();
       if (mounted) {
@@ -54,7 +89,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   orderData: activeOrder.data,
                 );
               }
-              return OrderTrackingScreen(orderId: activeOrder.orderId);
+              return OrderTrackingScreen(
+                orderId: activeOrder.orderId,
+                initialOrderData: activeOrder.data,
+              );
             },
           ),
         );
@@ -63,7 +101,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Ошибка входа: $e'),
+            content: Text('РћС€РёР±РєР° РІС…РѕРґР°: $e'),
             backgroundColor: Colors.redAccent,
           ),
         );
@@ -86,7 +124,7 @@ class _LoginScreenState extends State<LoginScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Увеличенный и отцентрованный логотип
+                // РЈРІРµР»РёС‡РµРЅРЅС‹Р№ Рё РѕС‚С†РµРЅС‚СЂРѕРІР°РЅРЅС‹Р№ Р»РѕРіРѕС‚РёРї
                 Image.asset(
                   'assets/logo.png',
                   height: 230,
@@ -101,7 +139,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  'Вход в систему',
+                  'Р’С…РѕРґ РІ СЃРёСЃС‚РµРјСѓ',
                   style: TextStyle(
                     color: colorScheme.onSurfaceVariant,
                     fontSize: 18,
@@ -118,7 +156,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   keyboardType: TextInputType.phone,
                   inputFormatters: [RuPhoneInputFormatter()],
                   decoration: InputDecoration(
-                    labelText: 'Номер телефона',
+                    labelText: 'РќРѕРјРµСЂ С‚РµР»РµС„РѕРЅР°',
                     labelStyle: TextStyle(color: colorScheme.onSurfaceVariant),
                     floatingLabelStyle: TextStyle(color: colorScheme.primary),
                     hintText: '+7 (700) 000-00-00',
@@ -139,7 +177,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   cursorColor: colorScheme.primary,
                   cursorErrorColor: colorScheme.error,
                   decoration: InputDecoration(
-                    labelText: 'Пароль',
+                    labelText: 'РџР°СЂРѕР»СЊ',
                     labelStyle: TextStyle(color: colorScheme.onSurfaceVariant),
                     floatingLabelStyle: TextStyle(color: colorScheme.primary),
                     hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
@@ -168,7 +206,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             color: colorScheme.onPrimary,
                           )
                         : Text(
-                            'Войти',
+                            'Р’РѕР№С‚Рё',
                             style: TextStyle(
                               color: colorScheme.onPrimary,
                               fontSize: 17,
@@ -182,7 +220,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text(
-                      'Нет аккаунта? ',
+                      'РќРµС‚ Р°РєРєР°СѓРЅС‚Р°? ',
                       style: TextStyle(color: colorScheme.onSurfaceVariant),
                     ),
                     TextButton(
@@ -195,7 +233,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         );
                       },
                       child: Text(
-                        'Зарегистрироваться',
+                        'Р—Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊСЃСЏ',
                         style: TextStyle(
                           color: colorScheme.primary,
                           fontWeight: FontWeight.bold,
@@ -213,15 +251,15 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-// Форматировщик ввода номера телефона +7 (XXX) XXX-XX-XX
-// Исправленный форматировщик номера телефона
+// Р¤РѕСЂРјР°С‚РёСЂРѕРІС‰РёРє РІРІРѕРґР° РЅРѕРјРµСЂР° С‚РµР»РµС„РѕРЅР° +7 (XXX) XXX-XX-XX
+// РСЃРїСЂР°РІР»РµРЅРЅС‹Р№ С„РѕСЂРјР°С‚РёСЂРѕРІС‰РёРє РЅРѕРјРµСЂР° С‚РµР»РµС„РѕРЅР°
 class RuPhoneInputFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
     TextEditingValue oldValue,
     TextEditingValue newValue,
   ) {
-    // 1. Если поле полностью очищено — разрешаем очистку
+    // 1. Р•СЃР»Рё РїРѕР»Рµ РїРѕР»РЅРѕСЃС‚СЊСЋ РѕС‡РёС‰РµРЅРѕ вЂ” СЂР°Р·СЂРµС€Р°РµРј РѕС‡РёСЃС‚РєСѓ
     if (newValue.text.isEmpty) {
       return newValue;
     }
@@ -229,15 +267,15 @@ class RuPhoneInputFormatter extends TextInputFormatter {
     final oldDigits = oldValue.text.replaceAll(RegExp(r'\D'), '');
     var newDigits = newValue.text.replaceAll(RegExp(r'\D'), '');
 
-    // 2. Если нажат Backspace и удален спецсимвол (скобка, дефис, пробел),
-    // кол-во цифр не изменилось — принудительно удаляем последнюю цифру
+    // 2. Р•СЃР»Рё РЅР°Р¶Р°С‚ Backspace Рё СѓРґР°Р»РµРЅ СЃРїРµС†СЃРёРјРІРѕР» (СЃРєРѕР±РєР°, РґРµС„РёСЃ, РїСЂРѕР±РµР»),
+    // РєРѕР»-РІРѕ С†РёС„СЂ РЅРµ РёР·РјРµРЅРёР»РѕСЃСЊ вЂ” РїСЂРёРЅСѓРґРёС‚РµР»СЊРЅРѕ СѓРґР°Р»СЏРµРј РїРѕСЃР»РµРґРЅСЋСЋ С†РёС„СЂСѓ
     if (newValue.text.length < oldValue.text.length && oldDigits == newDigits) {
       if (newDigits.isNotEmpty) {
         newDigits = newDigits.substring(0, newDigits.length - 1);
       }
     }
 
-    // 3. Если цифр больше нет — полностью очищаем поле
+    // 3. Р•СЃР»Рё С†РёС„СЂ Р±РѕР»СЊС€Рµ РЅРµС‚ вЂ” РїРѕР»РЅРѕСЃС‚СЊСЋ РѕС‡РёС‰Р°РµРј РїРѕР»Рµ
     if (newDigits.isEmpty) {
       return const TextEditingValue(
         text: '',
@@ -245,12 +283,12 @@ class RuPhoneInputFormatter extends TextInputFormatter {
       );
     }
 
-    // Убираем префикс 7 или 8, так как '+7 ' добавляется автоматически
+    // РЈР±РёСЂР°РµРј РїСЂРµС„РёРєСЃ 7 РёР»Рё 8, С‚Р°Рє РєР°Рє '+7 ' РґРѕР±Р°РІР»СЏРµС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё
     if (newDigits.startsWith('7') || newDigits.startsWith('8')) {
       newDigits = newDigits.substring(1);
     }
 
-    // Ограничиваем максимум 10 цифрами после +7
+    // РћРіСЂР°РЅРёС‡РёРІР°РµРј РјР°РєСЃРёРјСѓРј 10 С†РёС„СЂР°РјРё РїРѕСЃР»Рµ +7
     if (newDigits.length > 10) {
       newDigits = newDigits.substring(0, 10);
     }

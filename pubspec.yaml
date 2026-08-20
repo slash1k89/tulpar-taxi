@@ -1,4 +1,4 @@
-name: taxi_esil
+﻿name: taxi_esil
 description: "A new Flutter project."
 publish_to: 'none'
 
@@ -18,13 +18,10 @@ dependencies:
   video_player: ^2.8.6
   firebase_core: ^4.13.0
   firebase_auth: ^6.5.7
-  cloud_firestore: ^6.8.0
-  firebase_database: ^12.4.7
   mask_text_input_formatter: ^2.9.0
   web: ^1.0.0
   shared_preferences: ^2.3.2
   firebase_messaging: ^16.5.0 #
-  cloud_functions: ^6.0.0
 
 dev_dependencies:
   flutter_test:

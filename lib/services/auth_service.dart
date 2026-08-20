@@ -1,9 +1,14 @@
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+
+import 'tulpar_api_client.dart';
 
 class AuthService {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  AuthService({FirebaseAuth? auth, TulparApiClient? apiClient})
+    : _auth = auth ?? FirebaseAuth.instance,
+      _apiClient = apiClient ?? TulparApiClient();
+
+  final FirebaseAuth _auth;
+  final TulparApiClient _apiClient;
 
   String _cleanPhone(String phone) => phone.replaceAll(RegExp(r'\D'), '');
 
@@ -18,47 +23,50 @@ class AuthService {
       final cleanPhone = _cleanPhone(phone);
       final fakeEmail = '$cleanPhone@tulpar.kz';
 
-      UserCredential result = await _auth.createUserWithEmailAndPassword(
+      final result = await _auth.createUserWithEmailAndPassword(
         email: fakeEmail,
         password: password,
       );
 
       createdUser = result.user;
+
       if (createdUser == null) {
-        return 'Не удалось создать аккаунт';
+        return 'е удалось создать аккаунт';
       }
 
-      await _db.collection('users').doc(createdUser.uid).set({
-        'uid': createdUser.uid,
-        'name': name.trim(),
-        'phone': phone,
-        'role': 'passenger',
-        'rating': 5.0,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      await _apiClient.syncCurrentUser(name: name.trim(), phone: phone.trim());
 
       return null;
-    } on FirebaseAuthException catch (e) {
-      if (e.code == 'email-already-in-use') {
-        return 'Пользователь с таким номером уже существует';
+    } on FirebaseAuthException catch (error) {
+      if (error.code == 'email-already-in-use') {
+        return 'ользователь с таким номером уже существует';
       }
-      if (e.code == 'weak-password') {
-        return 'Пароль должен быть не менее 6 символов';
+
+      if (error.code == 'weak-password') {
+        return 'ароль должен быть не менее 6 символов';
       }
-      return 'Ошибка Firebase: ${e.message}';
-    } catch (e) {
-      // Auth и Firestore не образуют общую транзакцию. Если профиль создать
-      // не удалось, удаляем только что созданный Auth-аккаунт, чтобы не
-      // оставлять пользователя без обязательного users/{uid} профиля.
+
+      return 'шибка авторизации: ${error.message ?? error.code}';
+    } on TulparApiException catch (error) {
       if (createdUser != null) {
         try {
           await createdUser.delete();
-        } catch (_) {
-          // Исходную ошибку профиля показываем пользователю; повторная
-          // регистрация тем же номером всё равно сообщит о занятом номере.
-        }
+        } catch (_) {}
       }
-      return 'Не удалось создать профиль. Попробуйте ещё раз.';
+
+      if (error.statusCode == 409) {
+        return 'ользователь с таким номером уже существует';
+      }
+
+      return 'е удалось создать профиль: ${error.message}';
+    } catch (_) {
+      if (createdUser != null) {
+        try {
+          await createdUser.delete();
+        } catch (_) {}
+      }
+
+      return 'е удалось создать профиль. опробуйте ещё раз.';
     }
   }
 
@@ -68,18 +76,24 @@ class AuthService {
   }) async {
     try {
       final cleanPhone = _cleanPhone(phone);
-      final fakeEmail =
-          '$cleanPhone@tulpar.kz'; // Исправлено: единый домен проекта
+      final fakeEmail = '$cleanPhone@tulpar.kz';
 
       await _auth.signInWithEmailAndPassword(
         email: fakeEmail,
         password: password,
       );
+
+      // беспечиваем наличие пользователя в PostgreSQL даже для старого
+      // Firebase-аккаунта, созданного до перехода на VPS.
+      await _apiClient.syncCurrentUser(phone: phone.trim());
+
       return null;
-    } on FirebaseAuthException catch (_) {
-      return 'Неверный номер телефона или пароль';
-    } catch (e) {
-      return 'Ошибка авторизации: $e';
+    } on FirebaseAuthException {
+      return 'еверный номер телефона или пароль';
+    } on TulparApiException catch (error) {
+      return 'е удалось синхронизировать профиль: ${error.message}';
+    } catch (error) {
+      return 'шибка авторизации: $error';
     }
   }
 }

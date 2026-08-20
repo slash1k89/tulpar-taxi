@@ -98,7 +98,8 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
 
   Future<void> _advanceOrder(String currentStatus) async {
     final nextStatus = {
-      'accepted': 'arrived',
+      'accepted': 'driver_arrived',
+      'driver_arrived': 'in_progress',
       'arrived': 'in_progress',
       'in_progress': 'completed',
     }[currentStatus];

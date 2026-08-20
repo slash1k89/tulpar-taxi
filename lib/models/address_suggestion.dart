@@ -15,7 +15,8 @@ class AddressSuggestion {
     String name = json['display_name'] ?? '';
 
     if (address != null) {
-      final road = address['road'] ?? address['pedestrian'] ?? address['suburb'] ?? '';
+      final road =
+          address['road'] ?? address['pedestrian'] ?? address['suburb'] ?? '';
       final houseNumber = address['house_number'] ?? '';
       if (road.isNotEmpty) {
         name = houseNumber.isNotEmpty ? '$road, $houseNumber' : road;

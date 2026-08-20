@@ -7,9 +7,11 @@ import 'package:geolocator/geolocator.dart';
 import '/models/city.dart';
 import '/models/address_suggestion.dart';
 import '/services/city_service.dart';
+import '/services/active_order_service.dart';
 import '/services/order_creation_service.dart';
 import '/services/route_service.dart';
 import '/services/geocoding_service.dart';
+import '/services/startup_diagnostics.dart';
 import '/widgets/app_drawer.dart';
 import '/widgets/city_selection_modal.dart';
 import '/widgets/order_creation_error_snackbar.dart';
@@ -41,9 +43,8 @@ class _MapScreenState extends State<MapScreen> {
 
   final TextEditingController _fromAddressController = TextEditingController();
   final TextEditingController _toAddressController = TextEditingController();
-  final TextEditingController _priceController = TextEditingController(
-    text: '500',
-  );
+  final TextEditingController _priceController = TextEditingController();
+  String? _priceErrorText;
 
   List<AddressSuggestion> _fromSuggestions = [];
   List<AddressSuggestion> _toSuggestions = [];
@@ -57,11 +58,36 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      StartupDiagnostics.mark('map screen ready');
+    });
     _orderCreationService =
         widget.orderCreationService ?? OrderCreationService();
+    _applyCurrentMinimumPrice();
     _fromFocusNode.addListener(_selectFromPoint);
     _toFocusNode.addListener(_selectToPoint);
     _loadSavedCity();
+  }
+
+  int? _readEnteredPrice() =>
+      int.tryParse(_priceController.text.replaceAll(RegExp(r'\D'), ''));
+
+  void _applyCurrentMinimumPrice() {
+    final proposedPrice = _readEnteredPrice() ?? 0;
+    final adjustedPrice = _orderCreationService.priceWithCurrentMinimum(
+      proposedPrice,
+    );
+    if (adjustedPrice != proposedPrice) {
+      _priceController.text = adjustedPrice.toString();
+    }
+  }
+
+  String? _priceValidationMessage(int? proposedPrice) {
+    final minimumFare = _orderCreationService.currentMinimumFare;
+    if (proposedPrice == null || proposedPrice < minimumFare) {
+      return _orderCreationService.minimumFareMessage(minimumFare);
+    }
+    return null;
   }
 
   @override
@@ -244,9 +270,15 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
 
-    final priceInt =
-        int.tryParse(_priceController.text.replaceAll(RegExp(r'\D'), '')) ??
-        500;
+    final priceInt = _readEnteredPrice();
+    final priceError = _priceValidationMessage(priceInt);
+    if (priceError != null) {
+      setState(() => _priceErrorText = priceError);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(priceError)));
+      return;
+    }
 
     setState(() => _isCreatingOrder = true);
     late final String orderId;
@@ -260,7 +292,7 @@ class _MapScreenState extends State<MapScreen> {
             toAddress: _toAddressController.text.isEmpty
                 ? 'Точка B'
                 : _toAddressController.text,
-            price: priceInt,
+            price: priceInt!,
             fromPoint: _fromPoint!,
             toPoint: _toPoint!,
             cityId: _selectedCity.id,
@@ -282,6 +314,43 @@ class _MapScreenState extends State<MapScreen> {
         '[OrderCreation] UI failure type=${error.runtimeType} error=$error',
       );
       debugPrintStack(stackTrace: stackTrace);
+      if (error is OrderCreationException &&
+          error.failure == OrderCreationFailure.belowMinimumFare) {
+        final minimumFare =
+            error.minimumFare ?? _orderCreationService.currentMinimumFare;
+        if ((_readEnteredPrice() ?? 0) < minimumFare) {
+          _priceController.text = minimumFare.toString();
+        }
+        if (mounted) {
+          setState(() => _priceErrorText = error.userMessage);
+        }
+      }
+      if (error is OrderCreationException &&
+          error.failure == OrderCreationFailure.activeOrderExists) {
+        final activeOrder = await ActiveOrderService().findCurrentOrder();
+        if (!mounted) return;
+        if (activeOrder != null && !activeOrder.isDriver) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => OrderTrackingScreen(
+                orderId: activeOrder.orderId,
+                initialOrderData: activeOrder.data,
+              ),
+            ),
+          );
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Найдена устаревшая привязка заказа. Она не удалена автоматически. '
+              'Обратитесь к администратору для проверки.',
+            ),
+          ),
+        );
+        return;
+      }
       if (mounted) {
         showOrderCreationError(context, error);
       }
@@ -645,14 +714,22 @@ class _MapScreenState extends State<MapScreen> {
                       TextField(
                         controller: _priceController,
                         keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
+                        onChanged: (value) {
+                          setState(() {
+                            _priceErrorText = _priceValidationMessage(
+                              _readEnteredPrice(),
+                            );
+                          });
+                        },
+                        decoration: InputDecoration(
                           labelText: 'Ваша цена (₸)',
-                          prefixIcon: Icon(
+                          errorText: _priceErrorText,
+                          prefixIcon: const Icon(
                             Icons.attach_money,
                             color: Colors.amber,
                           ),
-                          border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(
+                          border: const OutlineInputBorder(),
+                          contentPadding: const EdgeInsets.symmetric(
                             horizontal: 12,
                             vertical: 10,
                           ),

@@ -2,8 +2,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../app_routes.dart';
-import '../screens/driver/driver_agreement_screen.dart';
-import '../services/driver_agreement_service.dart';
 
 enum AppMode { passenger, driver }
 
@@ -32,9 +30,6 @@ class _AppDrawerState extends State<AppDrawer> {
     if (_isChangingMode || driverMode == (widget.mode == AppMode.driver)) {
       return;
     }
-
-    setState(() => _isChangingMode = true);
-    Navigator.pop(context);
 
     try {
       final nextMode = driverMode ? AppMode.driver : AppMode.passenger;
@@ -67,26 +62,13 @@ class _AppDrawerState extends State<AppDrawer> {
         return;
       }
 
-      final agreementService = DriverAgreementService();
-      var accepted = await agreementService.hasAcceptedCurrentAgreement(
-        user.uid,
-      );
-      if (!accepted && mounted) {
-        accepted =
-            await Navigator.push<bool>(
-              context,
-              MaterialPageRoute(
-                builder: (_) => DriverAgreementScreen(
-                  userId: user.uid,
-                  agreementService: agreementService,
-                ),
-              ),
-            ) ??
-            false;
-      }
-      if (!accepted || !mounted) return;
+      // Closing the drawer disposes this State. Keep a NavigatorState before
+      // popping it and use that navigator for the entire onboarding flow.
+      final navigator = Navigator.of(context);
+      setState(() => _isChangingMode = true);
+      navigator.pop();
 
-      await Navigator.pushNamed(context, AppRoutes.driverSubscription);
+      await navigator.pushNamed(AppRoutes.driverOnboarding);
     } finally {
       if (mounted) setState(() => _isChangingMode = false);
     }

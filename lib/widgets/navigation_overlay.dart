@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import '../models/navigation_step.dart';
@@ -7,11 +7,7 @@ class NavigationOverlay extends StatefulWidget {
   final List<NavigationStep> steps;
   final VoidCallback? onOffRoute;
 
-  const NavigationOverlay({
-    super.key,
-    required this.steps,
-    this.onOffRoute,
-  });
+  const NavigationOverlay({super.key, required this.steps, this.onOffRoute});
 
   @override
   State<NavigationOverlay> createState() => _NavigationOverlayState();
@@ -54,41 +50,44 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
       distanceFilter: 3,
     );
 
-    _positionSubscription = Geolocator.getPositionStream(
-      locationSettings: locationSettings,
-    ).listen((Position position) {
-      if (_currentStepIndex >= widget.steps.length || _isRecalculating) return;
+    _positionSubscription =
+        Geolocator.getPositionStream(locationSettings: locationSettings).listen(
+          (Position position) {
+            if (_currentStepIndex >= widget.steps.length || _isRecalculating) {
+              return;
+            }
 
-      final currentStep = widget.steps[_currentStepIndex];
+            final currentStep = widget.steps[_currentStepIndex];
 
-      double distance = Geolocator.distanceBetween(
-        position.latitude,
-        position.longitude,
-        currentStep.targetLat,
-        currentStep.targetLng,
-      );
+            double distance = Geolocator.distanceBetween(
+              position.latitude,
+              position.longitude,
+              currentStep.targetLat,
+              currentStep.targetLng,
+            );
 
-      setState(() {
-        _distanceToNextStep = distance;
-      });
+            setState(() {
+              _distanceToNextStep = distance;
+            });
 
-      if (distance < _minDistanceToCurrentStep) {
-        _minDistanceToCurrentStep = distance;
-      }
+            if (distance < _minDistanceToCurrentStep) {
+              _minDistanceToCurrentStep = distance;
+            }
 
-      if (distance < 15 && _currentStepIndex < widget.steps.length - 1) {
-        setState(() {
-          _currentStepIndex++;
-          _minDistanceToCurrentStep = double.infinity;
-        });
-        return;
-      }
+            if (distance < 15 && _currentStepIndex < widget.steps.length - 1) {
+              setState(() {
+                _currentStepIndex++;
+                _minDistanceToCurrentStep = double.infinity;
+              });
+              return;
+            }
 
-      if (_minDistanceToCurrentStep != double.infinity &&
-          (distance - _minDistanceToCurrentStep > 45)) {
-        _triggerRecalculation();
-      }
-    });
+            if (_minDistanceToCurrentStep != double.infinity &&
+                (distance - _minDistanceToCurrentStep > 45)) {
+              _triggerRecalculation();
+            }
+          },
+        );
   }
 
   void _triggerRecalculation() {
@@ -137,9 +136,7 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
       child: Card(
         color: const Color(0xFF1E1E1E),
         elevation: 8,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Padding(
           padding: const EdgeInsets.all(16.0),
           child: Row(
@@ -166,10 +163,10 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
                   children: [
                     Text(
                       _isRecalculating
-                          ? 'Перерасчет...'
+                          ? 'Р СџР ВµРЎР‚Р ВµРЎР‚Р В°РЎРѓРЎвЂЎР ВµРЎвЂљ...'
                           : (_distanceToNextStep > 1000
-                              ? '${(_distanceToNextStep / 1000).toStringAsFixed(1)} км'
-                              : '${_distanceToNextStep.toInt()} м'),
+                                ? '${(_distanceToNextStep / 1000).toStringAsFixed(1)} Р С”Р С'
+                                : '${_distanceToNextStep.toInt()} Р С'),
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 24,
@@ -178,16 +175,13 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
                     ),
                     Text(
                       _isRecalculating
-                          ? 'Вы сбились с маршрута'
+                          ? 'Р вЂ™РЎвЂ№ РЎРѓР В±Р С‘Р В»Р С‘РЎРѓРЎРЉ РЎРѓ Р СР В°РЎР‚РЎв‚¬РЎР‚РЎС“РЎвЂљР В°'
                           : (step.streetName.isNotEmpty
-                              ? step.streetName
-                              : 'Следуйте по маршруту'),
+                                ? step.streetName
+                                : 'Р РЋР В»Р ВµР Т‘РЎС“Р в„–РЎвЂљР Вµ Р С—Р С• Р СР В°РЎР‚РЎв‚¬РЎР‚РЎС“РЎвЂљРЎС“'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.grey,
-                        fontSize: 14,
-                      ),
+                      style: const TextStyle(color: Colors.grey, fontSize: 14),
                     ),
                   ],
                 ),

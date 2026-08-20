@@ -12,7 +12,11 @@ class DriverMapScreen extends StatefulWidget {
   final String orderId;
   final Map<String, dynamic> orderData;
 
-  const DriverMapScreen({super.key, required this.orderId, required this.orderData});
+  const DriverMapScreen({
+    super.key,
+    required this.orderId,
+    required this.orderData,
+  });
 
   @override
   State<DriverMapScreen> createState() => _DriverMapScreenState();
@@ -32,14 +36,17 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
   Future<void> _trackDriverAndBuildRoute() async {
     Position pos = await Geolocator.getCurrentPosition();
     LatLng driverPos = LatLng(pos.latitude, pos.longitude);
-    LatLng passengerFrom = LatLng(widget.orderData['fromLat'], widget.orderData['fromLng']);
+    LatLng passengerFrom = LatLng(
+      widget.orderData['fromLat'],
+      widget.orderData['fromLng'],
+    );
 
     setState(() => _driverLocation = driverPos);
     _mapController.move(driverPos, 14.0);
 
     // Маршрут: Водитель -> Точка забора пассажира
     final url = Uri.parse(
-      'http://router.project-osrm.org/route/v1/driving/${driverPos.longitude},${driverPos.latitude};${passengerFrom.longitude},${passengerFrom.latitude}?geometries=geojson'
+      'http://router.project-osrm.org/route/v1/driving/${driverPos.longitude},${driverPos.latitude};${passengerFrom.longitude},${passengerFrom.latitude}?geometries=geojson',
     );
     try {
       final res = await http.get(url);
@@ -74,40 +81,84 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
 
   @override
   Widget build(BuildContext context) {
-    LatLng passengerFrom = LatLng(widget.orderData['fromLat'], widget.orderData['fromLng']);
-    LatLng passengerTo = LatLng(widget.orderData['toLat'], widget.orderData['toLng']);
+    LatLng passengerFrom = LatLng(
+      widget.orderData['fromLat'],
+      widget.orderData['fromLng'],
+    );
+    LatLng passengerTo = LatLng(
+      widget.orderData['toLat'],
+      widget.orderData['toLng'],
+    );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Выполнение заказа'), backgroundColor: Colors.green),
+      appBar: AppBar(
+        title: const Text('Выполнение заказа'),
+        backgroundColor: Colors.green,
+      ),
       body: Stack(
         children: [
           FlutterMap(
             mapController: _mapController,
-            options: MapOptions(initialCenter: passengerFrom, initialZoom: 14.0),
+            options: MapOptions(
+              initialCenter: passengerFrom,
+              initialZoom: 14.0,
+            ),
             children: [
               TileLayer(
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.example.esil_taxi',
               ),
               if (_routePoints.isNotEmpty)
-                PolylineLayer(polylines: [Polyline(points: _routePoints, color: Colors.green, strokeWidth: 5)]),
-              MarkerLayer(markers: [
-                if (_driverLocation != null)
-                  Marker(point: _driverLocation!, child: const Icon(Icons.navigation, color: Colors.blue, size: 40)),
-                Marker(point: passengerFrom, child: const Icon(Icons.person_pin_circle, color: Colors.green, size: 45)),
-                Marker(point: passengerTo, child: const Icon(Icons.flag, color: Colors.red, size: 40)),
-              ]),
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _routePoints,
+                      color: Colors.green,
+                      strokeWidth: 5,
+                    ),
+                  ],
+                ),
+              MarkerLayer(
+                markers: [
+                  if (_driverLocation != null)
+                    Marker(
+                      point: _driverLocation!,
+                      child: const Icon(
+                        Icons.navigation,
+                        color: Colors.blue,
+                        size: 40,
+                      ),
+                    ),
+                  Marker(
+                    point: passengerFrom,
+                    child: const Icon(
+                      Icons.person_pin_circle,
+                      color: Colors.green,
+                      size: 45,
+                    ),
+                  ),
+                  Marker(
+                    point: passengerTo,
+                    child: const Icon(Icons.flag, color: Colors.red, size: 40),
+                  ),
+                ],
+              ),
             ],
           ),
           Positioned(
-            bottom: 20, left: 15, right: 15,
+            bottom: 20,
+            left: 15,
+            right: 15,
             child: Card(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('Клиент ожидает: ${widget.orderData['fromAddress']}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                    Text(
+                      'Клиент ожидает: ${widget.orderData['fromAddress']}',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     const SizedBox(height: 10),
                     Row(
                       children: [
@@ -117,25 +168,33 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
                             label: const Text('Чат'),
                             onPressed: () => Navigator.push(
                               context,
-                              MaterialPageRoute(builder: (_) => ChatScreen(orderId: widget.orderId, peerName: 'Пассажир')),
+                              MaterialPageRoute(
+                                builder: (_) => ChatScreen(
+                                  orderId: widget.orderId,
+                                  peerName: 'Пассажир',
+                                ),
+                              ),
                             ),
                           ),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                            ),
                             onPressed: _completeOrder,
                             child: const Text('Завершить'),
                           ),
                         ),
                       ],
-                    )
+                    ),
                   ],
                 ),
               ),
             ),
-          )
+          ),
         ],
       ),
     );

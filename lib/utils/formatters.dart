@@ -2,7 +2,10 @@ import 'package:flutter/services.dart';
 
 class KazakhPhoneInputFormatter extends TextInputFormatter {
   @override
-  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
     final text = newValue.text.replaceAll(RegExp(r'\D'), '');
     if (text.isEmpty) return newValue.copyWith(text: '');
 
@@ -14,7 +17,10 @@ class KazakhPhoneInputFormatter extends TextInputFormatter {
     if (text.length > index) {
       if (text.length - index <= 3) {
         result.write(text.substring(index));
-        return TextEditingValue(text: result.toString(), selection: TextSelection.collapsed(offset: result.length));
+        return TextEditingValue(
+          text: result.toString(),
+          selection: TextSelection.collapsed(offset: result.length),
+        );
       } else {
         result.write(text.substring(index, index + 3));
         result.write(') ');
@@ -24,7 +30,10 @@ class KazakhPhoneInputFormatter extends TextInputFormatter {
     if (text.length > index) {
       if (text.length - index <= 3) {
         result.write(text.substring(index));
-        return TextEditingValue(text: result.toString(), selection: TextSelection.collapsed(offset: result.length));
+        return TextEditingValue(
+          text: result.toString(),
+          selection: TextSelection.collapsed(offset: result.length),
+        );
       } else {
         result.write(text.substring(index, index + 3));
         result.write('-');
@@ -34,7 +43,10 @@ class KazakhPhoneInputFormatter extends TextInputFormatter {
     if (text.length > index) {
       if (text.length - index <= 2) {
         result.write(text.substring(index));
-        return TextEditingValue(text: result.toString(), selection: TextSelection.collapsed(offset: result.length));
+        return TextEditingValue(
+          text: result.toString(),
+          selection: TextSelection.collapsed(offset: result.length),
+        );
       } else {
         result.write(text.substring(index, index + 2));
         result.write('-');
@@ -46,6 +58,9 @@ class KazakhPhoneInputFormatter extends TextInputFormatter {
       result.write(text.substring(index, end));
     }
 
-    return TextEditingValue(text: result.toString(), selection: TextSelection.collapsed(offset: result.length));
+    return TextEditingValue(
+      text: result.toString(),
+      selection: TextSelection.collapsed(offset: result.length),
+    );
   }
 }

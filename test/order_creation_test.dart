@@ -36,6 +36,8 @@ void main() {
       'fromAddress': 'Улица А, 1',
       'toAddress': 'Улица Б, 2',
       'price': 750,
+      'passengerPrice': 750,
+      'agreedPrice': null,
       'fromLat': 51.957,
       'fromLng': 66.404,
       'toLat': 51.969,
@@ -77,6 +79,16 @@ void main() {
     expect(find.textContaining('converted Future'), findsNothing);
   });
 
+  test('active-order failure preserves the binding id for safe recovery', () {
+    const error = OrderCreationException(
+      OrderCreationFailure.activeOrderExists,
+      'У вас уже есть активный заказ. Открываем его.',
+      activeOrderId: 'active-order-1',
+    );
+
+    expect(error.activeOrderId, 'active-order-1');
+  });
+
   testWidgets('repeated taps share one in-flight creation', (tester) async {
     final gateway = _CompletingOrderGateway();
     final service = OrderCreationService(gateway: gateway);
@@ -91,7 +103,7 @@ void main() {
                 service.createOrder(
                   fromAddress: 'Точка А',
                   toAddress: 'Точка Б',
-                  price: 500,
+                  price: 800,
                   fromPoint: from,
                   toPoint: to,
                   cityId: 'esil',

@@ -32,9 +32,7 @@ class RouteService {
         }
 
         final List stepsData = legs[0]['steps'] ?? [];
-        return stepsData
-            .map((e) => NavigationStep.fromJson(e as Map))
-            .toList();
+        return stepsData.map((e) => NavigationStep.fromJson(e as Map)).toList();
       } else {
         throw Exception('Ошибка загрузки маршрута: ${response.statusCode}');
       }
@@ -69,7 +67,9 @@ class RouteService {
         // OSRM возвращает [longitude, latitude], а FlutterMap требует LatLng(latitude, longitude)
         return coordinates.map((c) => LatLng(c[1], c[0])).toList();
       } else {
-        throw Exception('Ошибка загрузки геометрии маршрута: ${response.statusCode}');
+        throw Exception(
+          'Ошибка загрузки геометрии маршрута: ${response.statusCode}',
+        );
       }
     } catch (e) {
       throw Exception('Ошибка сети при получении геометрии: $e');

@@ -1,10 +1,10 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../models/address_suggestion.dart';
 
 class GeocodingService {
-  // 1. Поиск подсказок при ручном вводе
+  // 1. Р СџР С•Р С‘РЎРѓР С” Р С—Р С•Р Т‘РЎРѓР С”Р В°Р В·Р С•Р С” Р С—РЎР‚Р С‘ РЎР‚РЎС“РЎвЂЎР Р…Р С•Р С Р Р†Р Р†Р С•Р Т‘Р Вµ
   static Future<List<AddressSuggestion>> searchAddress({
     required String query,
     required String cityName,
@@ -14,9 +14,10 @@ class GeocodingService {
     final cleanQuery = query.trim();
     if (cleanQuery.length < 2) return [];
 
-    // Уровень 1: Поиск через Photon (чистый текст query + гео-приоритет по lat/lon)
+    // Р Р€РЎР‚Р С•Р Р†Р ВµР Р…РЎРЉ 1: Р СџР С•Р С‘РЎРѓР С” РЎвЂЎР ВµРЎР‚Р ВµР В· Photon (РЎвЂЎР С‘РЎРѓРЎвЂљРЎвЂ№Р в„– РЎвЂљР ВµР С”РЎРѓРЎвЂљ query + Р С–Р ВµР С•-Р С—РЎР‚Р С‘Р С•РЎР‚Р С‘РЎвЂљР ВµРЎвЂљ Р С—Р С• lat/lon)
     try {
-      final String urlStr = 'https://photon.komoot.io/api/?q=${Uri.encodeComponent(cleanQuery)}'
+      final String urlStr =
+          'https://photon.komoot.io/api/?q=${Uri.encodeComponent(cleanQuery)}'
           '&lang=ru&limit=7'
           '${cityLat != null && cityLng != null ? "&lat=$cityLat&lon=$cityLng" : ""}';
 
@@ -24,7 +25,9 @@ class GeocodingService {
       final response = await http.get(url);
 
       if (response.statusCode == 200) {
-        final Map<String, dynamic> data = jsonDecode(utf8.decode(response.bodyBytes));
+        final Map<String, dynamic> data = jsonDecode(
+          utf8.decode(response.bodyBytes),
+        );
         final List features = data['features'] ?? [];
 
         if (features.isNotEmpty) {
@@ -38,7 +41,10 @@ class GeocodingService {
             final String name = props['name']?.toString() ?? '';
             final String street = props['street']?.toString() ?? '';
             final String house = props['housenumber']?.toString() ?? '';
-            final String district = props['district']?.toString() ?? props['city']?.toString() ?? '';
+            final String district =
+                props['district']?.toString() ??
+                props['city']?.toString() ??
+                '';
 
             String title = '';
             if (street.isNotEmpty) {
@@ -67,7 +73,7 @@ class GeocodingService {
       debugPrint('Photon Search Exception: $e');
     }
 
-    // Уровень 2: Фолбэк на Nominatim, если Photon вернул 0 результатов
+    // Р Р€РЎР‚Р С•Р Р†Р ВµР Р…РЎРЉ 2: Р В¤Р С•Р В»Р В±РЎРЊР С” Р Р…Р В° Nominatim, Р ВµРЎРѓР В»Р С‘ Photon Р Р†Р ВµРЎР‚Р Р…РЎС“Р В» 0 РЎР‚Р ВµР В·РЎС“Р В»РЎРЉРЎвЂљР В°РЎвЂљР С•Р Р†
     try {
       final searchQuery = '$cleanQuery, $cityName';
       final Uri nominatimUrl = Uri.parse(
@@ -91,7 +97,11 @@ class GeocodingService {
           String title = item['display_name'] ?? '';
 
           if (address != null) {
-            final road = address['road'] ?? address['pedestrian'] ?? address['building'] ?? '';
+            final road =
+                address['road'] ??
+                address['pedestrian'] ??
+                address['building'] ??
+                '';
             final house = address['house_number'] ?? '';
             if (road.toString().isNotEmpty) {
               title = house.toString().isNotEmpty ? '$road, $house' : '$road';
@@ -112,7 +122,7 @@ class GeocodingService {
     return [];
   }
 
-  // 2. Обратное геокодирование (Клик на карте -> Адрес)
+  // 2. Р С›Р В±РЎР‚Р В°РЎвЂљР Р…Р С•Р Вµ Р С–Р ВµР С•Р С”Р С•Р Т‘Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р С‘Р Вµ (Р С™Р В»Р С‘Р С” Р Р…Р В° Р С”Р В°РЎР‚РЎвЂљР Вµ -> Р С’Р Т‘РЎР‚Р ВµРЎРѓ)
   static Future<String> reverseGeocode(double lat, double lng) async {
     try {
       final Uri photonUrl = Uri.parse(
@@ -121,7 +131,9 @@ class GeocodingService {
       final response = await http.get(photonUrl);
 
       if (response.statusCode == 200) {
-        final Map<String, dynamic> data = jsonDecode(utf8.decode(response.bodyBytes));
+        final Map<String, dynamic> data = jsonDecode(
+          utf8.decode(response.bodyBytes),
+        );
         final List features = data['features'] ?? [];
 
         if (features.isNotEmpty) {
@@ -130,7 +142,11 @@ class GeocodingService {
           final String name = props['name']?.toString() ?? '';
           final String street = props['street']?.toString() ?? '';
           final String house = props['housenumber']?.toString() ?? '';
-          final String district = props['district']?.toString() ?? props['suburb']?.toString() ?? props['city']?.toString() ?? '';
+          final String district =
+              props['district']?.toString() ??
+              props['suburb']?.toString() ??
+              props['city']?.toString() ??
+              '';
 
           if (street.isNotEmpty && house.isNotEmpty) return '$street, $house';
           if (street.isNotEmpty) return street;
@@ -153,11 +169,13 @@ class GeocodingService {
       );
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+        final data =
+            jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
         final address = data['address'] as Map<String, dynamic>?;
 
         if (address != null) {
-          final road = address['road'] ??
+          final road =
+              address['road'] ??
               address['pedestrian'] ??
               address['building'] ??
               address['amenity'] ??
@@ -166,13 +184,17 @@ class GeocodingService {
           final houseNumber = address['house_number'] ?? '';
 
           if (road.toString().isNotEmpty) {
-            return houseNumber.toString().isNotEmpty ? '$road, $houseNumber' : '$road';
+            return houseNumber.toString().isNotEmpty
+                ? '$road, $houseNumber'
+                : '$road';
           }
         }
 
         if (data['display_name'] != null) {
           final parts = (data['display_name'] as String).split(',');
-          if (parts.length >= 2) return '${parts[0].trim()}, ${parts[1].trim()}';
+          if (parts.length >= 2) {
+            return '${parts[0].trim()}, ${parts[1].trim()}';
+          }
           return parts[0].trim();
         }
       }
@@ -180,6 +202,6 @@ class GeocodingService {
       debugPrint('Nominatim Reverse Exception: $e');
     }
 
-    return 'Точка на карте (${lat.toStringAsFixed(3)}, ${lng.toStringAsFixed(3)})';
+    return 'Р СћР С•РЎвЂЎР С”Р В° Р Р…Р В° Р С”Р В°РЎР‚РЎвЂљР Вµ (${lat.toStringAsFixed(3)}, ${lng.toStringAsFixed(3)})';
   }
 }

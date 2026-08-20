@@ -122,9 +122,7 @@ class _DriverNavigationScreenState extends State<DriverNavigationScreen> {
           ),
 
           if (_isLoading)
-            const Center(
-              child: CircularProgressIndicator(color: Colors.amber),
-            ),
+            const Center(child: CircularProgressIndicator(color: Colors.amber)),
 
           if (_errorMessage.isNotEmpty)
             Center(
@@ -140,10 +138,7 @@ class _DriverNavigationScreenState extends State<DriverNavigationScreen> {
             ),
 
           if (!_isLoading && _steps.isNotEmpty)
-            NavigationOverlay(
-              steps: _steps,
-              onOffRoute: _recalculateRoute,
-            ),
+            NavigationOverlay(steps: _steps, onOffRoute: _recalculateRoute),
         ],
       ),
     );

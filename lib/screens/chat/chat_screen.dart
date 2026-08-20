@@ -1,17 +1,15 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+
+import '../../services/tulpar_api_client.dart';
 
 class ChatScreen extends StatefulWidget {
   final String orderId;
   final String peerName;
 
-  const ChatScreen({
-    super.key,
-    required this.orderId,
-    required this.peerName,
-  });
+  const ChatScreen({super.key, required this.orderId, required this.peerName});
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -19,73 +17,136 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController = TextEditingController();
+
+  final TulparApiClient _api = TulparApiClient();
+
   final String _currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
-  StreamSubscription<QuerySnapshot>? _messageSubscription;
-  bool _isInitialLoad = true;
+
+  Timer? _refreshTimer;
+
+  List<Map<String, dynamic>> _messages = const [];
+
+  bool _isLoading = true;
+  bool _isSending = false;
+
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _listenForIncomingMessages();
+
+    _loadMessages();
+
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _loadMessages(silent: true),
+    );
   }
 
   @override
   void dispose() {
-    _messageSubscription?.cancel();
+    _refreshTimer?.cancel();
     _messageController.dispose();
     super.dispose();
   }
 
-  void _listenForIncomingMessages() {
-    _messageSubscription = FirebaseFirestore.instance
-        .collection('orders')
-        .doc(widget.orderId)
-        .collection('messages')
-        .orderBy('createdAt', descending: true)
-        .snapshots()
-        .listen((snapshot) {
-      if (_isInitialLoad) {
-        _isInitialLoad = false;
-        return;
+  Future<void> _loadMessages({bool silent = false}) async {
+    try {
+      final messages = await _api.getChatMessages(widget.orderId);
+
+      if (!mounted) return;
+
+      setState(() {
+        _messages = messages;
+        _error = null;
+
+        if (!silent) {
+          _isLoading = false;
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+
+      if (!silent) {
+        setState(() {
+          _isLoading = false;
+          _error = _messageForError(error);
+        });
       }
 
-      for (var change in snapshot.docChanges) {
-        if (change.type == DocumentChangeType.added) {
-          final data = change.doc.data();
-          if (data != null && data['senderId'] != _currentUserId) {
-            final text = data['text'] ?? '';
-            if (mounted) {
-              ScaffoldMessenger.of(context).hideCurrentSnackBar();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Новое сообщение от ${widget.peerName}: $text'),
-                  backgroundColor: Colors.amber[800],
-                  behavior: SnackBarBehavior.floating,
-                  duration: const Duration(seconds: 3),
-                ),
-              );
-            }
-          }
-        }
-      }
-    });
+      debugPrint('[Chat] load failed: $error');
+    }
   }
 
   Future<void> _sendMessage() async {
+    if (_isSending) return;
+
     final text = _messageController.text.trim();
+
     if (text.isEmpty) return;
 
-    _messageController.clear();
+    setState(() => _isSending = true);
 
-    await FirebaseFirestore.instance
-        .collection('orders')
-        .doc(widget.orderId)
-        .collection('messages')
-        .add({
-      'senderId': _currentUserId,
-      'text': text,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
+    try {
+      await _api.sendChatMessage(orderId: widget.orderId, text: text);
+
+      _messageController.clear();
+
+      await _loadMessages(silent: true);
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_messageForError(error))));
+
+      debugPrint('[Chat] send failed: $error');
+    } finally {
+      if (mounted) {
+        setState(() => _isSending = false);
+      }
+    }
+  }
+
+  String _messageForError(Object error) {
+    if (error is TulparApiException) {
+      switch (error.statusCode) {
+        case 400:
+          return '????????? ?????? ????????? ?? 1 ?? 2000 ????????.';
+
+        case 401:
+          return '?????? ? ??????? ? ????????? ???????.';
+
+        case 403:
+          return '?? ??????? ? ???? ???? ???????.';
+
+        case 404:
+          return '?????? ?? ???????.';
+
+        default:
+          return error.message;
+      }
+    }
+
+    return '? ??????? ????????? ? ????????.';
+  }
+
+  DateTime? _parseDate(dynamic value) {
+    if (value == null) return null;
+
+    return DateTime.tryParse(value.toString())?.toLocal();
+  }
+
+  String _timeText(dynamic value) {
+    final date = _parseDate(value);
+
+    if (date == null) return '';
+
+    final hour = date.hour.toString().padLeft(2, '0');
+
+    final minute = date.minute.toString().padLeft(2, '0');
+
+    return '$hour:$minute';
   }
 
   @override
@@ -102,97 +163,146 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: [
-          Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('orders')
-                  .doc(widget.orderId)
-                  .collection('messages')
-                  .orderBy('createdAt', descending: true)
-                  .snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator(color: Colors.amber));
-                }
+          Expanded(child: _buildMessages()),
+          _buildComposer(),
+        ],
+      ),
+    );
+  }
 
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return const Center(
-                    child: Text('Нет сообщений. Напишите первым!'),
-                  );
-                }
+  Widget _buildMessages() {
+    if (_isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.amber),
+      );
+    }
 
-                final docs = snapshot.data!.docs;
-
-                return ListView.builder(
-                  reverse: true,
-                  padding: const EdgeInsets.all(12),
-                  itemCount: docs.length,
-                  itemBuilder: (context, index) {
-                    final data = docs[index].data() as Map<String, dynamic>;
-                    final bool isMe = data['senderId'] == _currentUserId;
-
-                    return Align(
-                      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(vertical: 4),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: isMe ? Colors.amber : Colors.grey[300],
-                          borderRadius: BorderRadius.only(
-                            topLeft: const Radius.circular(16),
-                            topRight: const Radius.circular(16),
-                            bottomLeft: Radius.circular(isMe ? 16 : 0),
-                            bottomRight: Radius.circular(isMe ? 0 : 16),
-                          ),
-                        ),
-                        child: Text(
-                          data['text'] ?? '',
-                          style: TextStyle(
-                            color: isMe ? Colors.black : Colors.black87,
-                            fontSize: 15,
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
+    if (_error != null && _messages.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_error!, textAlign: TextAlign.center),
+              const SizedBox(height: 12),
+              ElevatedButton(
+                onPressed: _loadMessages,
+                child: const Text('????????'),
+              ),
+            ],
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 5,
-                  offset: const Offset(0, -2),
+        ),
+      );
+    }
+
+    if (_messages.isEmpty) {
+      return const Center(child: Text('?? ?????????. ??????? ??????!'));
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadMessages,
+      child: ListView.builder(
+        reverse: true,
+        padding: const EdgeInsets.all(12),
+        itemCount: _messages.length,
+        itemBuilder: (context, index) {
+          // VPS ??? ?????????? ?????????:
+          // ORDER BY created_at DESC
+          final data = _messages[index];
+
+          final isMe = data['senderId']?.toString() == _currentUserId;
+
+          final text = data['text']?.toString() ?? '';
+
+          final time = _timeText(data['createdAt']);
+
+          return Align(
+            alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 300),
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              decoration: BoxDecoration(
+                color: isMe ? Colors.amber : Colors.grey[300],
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(16),
+                  topRight: const Radius.circular(16),
+                  bottomLeft: Radius.circular(isMe ? 16 : 0),
+                  bottomRight: Radius.circular(isMe ? 0 : 16),
                 ),
-              ],
-            ),
-            child: SafeArea(
-              child: Row(
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _messageController,
-                      decoration: const InputDecoration(
-                        hintText: 'Сообщение...',
-                        border: InputBorder.none,
-                      ),
-                      onSubmitted: (_) => _sendMessage(),
+                  Text(
+                    text,
+                    style: TextStyle(
+                      color: isMe ? Colors.black : Colors.black87,
+                      fontSize: 15,
                     ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.send, color: Colors.amber),
-                    onPressed: _sendMessage,
-                  ),
+                  if (time.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      time,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: Colors.black54,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildComposer() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 5,
+            offset: Offset(0, -2),
           ),
         ],
+      ),
+      child: SafeArea(
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _messageController,
+                maxLength: 2000,
+                minLines: 1,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  hintText: '?????????...',
+                  border: InputBorder.none,
+                  counterText: '',
+                ),
+                onSubmitted: (_) => _sendMessage(),
+              ),
+            ),
+            IconButton(
+              icon: _isSending
+                  ? const SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.send, color: Colors.amber),
+              onPressed: _isSending ? null : _sendMessage,
+            ),
+          ],
+        ),
       ),
     );
   }

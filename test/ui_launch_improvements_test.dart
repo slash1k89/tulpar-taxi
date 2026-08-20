@@ -11,6 +11,24 @@ import 'package:taxi_esil/services/user_profile_service.dart';
 import 'package:taxi_esil/widgets/app_drawer.dart';
 
 void main() {
+  test('empty optional car model is not sent with a name update', () {
+    expect(
+      buildUserProfileUpdateData(
+        name: '  РќРѕРІРѕРµ РёРјСЏ  ',
+        carModel: '   ',
+      ),
+      {'name': 'РќРѕРІРѕРµ РёРјСЏ'},
+    );
+
+    expect(
+      buildUserProfileUpdateData(
+        name: '  РќРѕРІРѕРµ РёРјСЏ  ',
+        carModel: '  Toyota Camry  ',
+      ),
+      {'name': 'РќРѕРІРѕРµ РёРјСЏ', 'carModel': 'Toyota Camry'},
+    );
+  });
+
   testWidgets('theme preference is saved and applied without restart', (
     tester,
   ) async {
@@ -73,13 +91,13 @@ void main() {
 
     await tester.enterText(
       find.byKey(const Key('profile_name_field')),
-      '  Новое имя  ',
+      '  РќРѕРІРѕРµ РёРјСЏ  ',
     );
     await tester.tap(find.byKey(const Key('save_profile_button')));
     await tester.pump();
 
     expect(repository.updatedUserId, 'user-1');
-    expect(repository.updatedName, 'Новое имя');
+    expect(repository.updatedName, 'РќРѕРІРѕРµ РёРјСЏ');
     expect(repository.updatedCarModel, 'Toyota Camry');
     expect(repository.updateCalls, 1);
   });
@@ -92,7 +110,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          appBar: AppBar(title: const Text('Карта')),
+          appBar: AppBar(title: const Text('РљР°СЂС‚Р°')),
           drawer: AppDrawer(
             mode: AppMode.passenger,
             userLabel: 'user@test.local',
@@ -122,7 +140,6 @@ void main() {
       MaterialApp(
         home: SplashScreen(
           initializeVideo: false,
-          minimumDuration: const Duration(milliseconds: 10),
           maximumDuration: const Duration(milliseconds: 50),
           startupLoader: () => loader.future,
           timeoutFallback: () => const SplashDestination.login(),
@@ -138,6 +155,28 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     await tester.pump();
     expect(navigationCount, 1);
+  });
+
+  testWidgets('splash shows branded startup with a loading spinner', (
+    tester,
+  ) async {
+    final loader = Completer<SplashDestination>();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SplashScreen(
+          initializeVideo: false,
+          startupLoader: () => loader.future,
+          onNavigate: (_) {},
+        ),
+      ),
+    );
+
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    loader.complete(const SplashDestination.login());
+    await tester.pump();
   });
 }
 
@@ -164,7 +203,7 @@ class _FakeProfileRepository implements UserProfileRepository {
   @override
   Future<UserProfile?> load(String userId) async {
     return const UserProfile(
-      name: 'Старое имя',
+      name: 'РЎС‚Р°СЂРѕРµ РёРјСЏ',
       phone: '+7 700 000-00-00',
       averageRating: 4.8,
       carModel: 'Toyota Camry',

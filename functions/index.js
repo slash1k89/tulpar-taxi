@@ -5,6 +5,7 @@ admin.initializeApp();
 const db = admin.firestore();
 const rtdb = admin.database();
 const {FieldValue} = admin.firestore;
+const {createSubmitRatingHandler} = require("./rating");
 
 /**
  * Grants both order participants access to the active location node.
@@ -97,6 +98,11 @@ function requireDriverProfile(profile, uid) {
     carNumber: data.carNumber.trim(),
   };
 }
+
+exports.submitRating = functions.https.onCall(createSubmitRatingHandler({
+  db,
+  HttpsError: functions.https.HttpsError,
+}));
 
 exports.acceptOrder = functions.https.onCall(async (data, context) => {
   const orderId = requireOrderId(data);

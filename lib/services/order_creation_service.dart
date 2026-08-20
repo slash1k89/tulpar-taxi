@@ -1,11 +1,14 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
+import 'dart:async';
+
 import 'package:latlong2/latlong.dart';
+
+import 'minimum_fare_service.dart';
+import 'tulpar_api_client.dart';
 
 enum OrderCreationFailure {
   notAuthenticated,
   activeOrderExists,
+  belowMinimumFare,
   invalidData,
   permissionDenied,
   unavailable,
@@ -13,11 +16,19 @@ enum OrderCreationFailure {
 }
 
 class OrderCreationException implements Exception {
-  const OrderCreationException(this.failure, this.userMessage, {this.cause});
+  const OrderCreationException(
+    this.failure,
+    this.userMessage, {
+    this.cause,
+    this.activeOrderId,
+    this.minimumFare,
+  });
 
   final OrderCreationFailure failure;
   final String userMessage;
   final Object? cause;
+  final String? activeOrderId;
+  final int? minimumFare;
 
   @override
   String toString() => 'OrderCreationException($failure, cause: $cause)';
@@ -38,14 +49,12 @@ class OrderDraft {
   final int price;
   final LatLng fromPoint;
   final LatLng toPoint;
-
-  /// Used for validation and diagnostics. The current Firestore schema does
-  /// not store a city field, so it is intentionally not serialized.
   final String cityId;
 
   void validate() {
     final from = fromAddress.trim();
     final to = toAddress.trim();
+
     final coordinates = [
       fromPoint.latitude,
       fromPoint.longitude,
@@ -74,12 +83,12 @@ class OrderDraft {
         !coordinatesAreValid) {
       throw const OrderCreationException(
         OrderCreationFailure.invalidData,
-        'Проверьте адреса, цену и точки маршрута.',
+        '????????? ??????, ???? ? ????? ????????.',
       );
     }
   }
 
-  Map<String, Object> toFirestore({
+  Map<String, Object?> toFirestore({
     required String passengerId,
     required Object createdAt,
   }) {
@@ -88,6 +97,8 @@ class OrderDraft {
       'fromAddress': fromAddress.trim(),
       'toAddress': toAddress.trim(),
       'price': price,
+      'passengerPrice': price,
+      'agreedPrice': null,
       'fromLat': fromPoint.latitude,
       'fromLng': fromPoint.longitude,
       'toLat': toPoint.latitude,
@@ -102,125 +113,115 @@ abstract interface class OrderCreationGateway {
   Future<String> create(OrderDraft draft);
 }
 
-class FirebaseOrderCreationGateway implements OrderCreationGateway {
-  FirebaseOrderCreationGateway({
-    FirebaseAuth? auth,
-    FirebaseFirestore? firestore,
-  }) : _auth = auth ?? FirebaseAuth.instance,
-       _firestore = firestore ?? FirebaseFirestore.instance;
+class VpsOrderCreationGateway implements OrderCreationGateway {
+  VpsOrderCreationGateway({TulparApiClient? apiClient})
+    : _apiClient = apiClient ?? TulparApiClient();
 
-  final FirebaseAuth _auth;
-  final FirebaseFirestore _firestore;
+  final TulparApiClient _apiClient;
 
   @override
   Future<String> create(OrderDraft draft) async {
-    final userId = _auth.currentUser?.uid;
-    if (userId == null || userId.isEmpty) {
-      throw const OrderCreationException(
-        OrderCreationFailure.notAuthenticated,
-        'Войдите в аккаунт и повторите попытку.',
-      );
-    }
-
     draft.validate();
-    final orderRef = _firestore.collection('orders').doc();
-    final activeOrderRef = _firestore.collection('active_orders').doc(userId);
-
-    debugPrint(
-      '[OrderCreation] start uid=$userId orderId=${orderRef.id} '
-      'city=${draft.cityId} from=${draft.fromPoint} to=${draft.toPoint}',
-    );
 
     try {
-      final wasCreated = await _firestore.runTransaction<bool>((
-        transaction,
-      ) async {
-        final activeOrder = await transaction.get(activeOrderRef);
-        if (activeOrder.exists) {
-          // Do not throw a Dart exception from this callback. On Flutter Web
-          // it crosses a JS Promise boundary and is boxed as a converted Future.
-          return false;
-        }
+      final result = await _apiClient.createCityOrder(
+        passengerPrice: draft.price,
+        pickupAddress: draft.fromAddress.trim(),
+        destinationAddress: draft.toAddress.trim(),
+        pickupLat: draft.fromPoint.latitude,
+        pickupLng: draft.fromPoint.longitude,
+        destinationLat: draft.toPoint.latitude,
+        destinationLng: draft.toPoint.longitude,
+      );
 
-        final createdAt = FieldValue.serverTimestamp();
-        transaction.set(
-          orderRef,
-          draft.toFirestore(passengerId: userId, createdAt: createdAt),
-        );
-        transaction.set(activeOrderRef, {
-          'orderId': orderRef.id,
-          'role': 'passenger',
-          'status': 'searching',
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-        return true;
-      });
+      final id = result['id'];
 
-      if (!wasCreated) {
+      if (id is! String || id.isEmpty) {
         throw const OrderCreationException(
-          OrderCreationFailure.activeOrderExists,
-          'У вас уже есть активный заказ.',
+          OrderCreationFailure.unknown,
+          'Сервер создал заказ, но не вернул его идентификатор.',
         );
       }
 
-      debugPrint('[OrderCreation] success uid=$userId orderId=${orderRef.id}');
-      return orderRef.id;
-    } on OrderCreationException catch (error, stackTrace) {
-      _logFailure(error, stackTrace, userId: userId, orderId: orderRef.id);
-      rethrow;
-    } on FirebaseException catch (error, stackTrace) {
-      _logFailure(error, stackTrace, userId: userId, orderId: orderRef.id);
-      final mapped = switch (error.code) {
-        'permission-denied' => OrderCreationException(
+      return id;
+    } on TulparApiException catch (error) {
+      if (error.statusCode == 401) {
+        throw OrderCreationException(
+          OrderCreationFailure.notAuthenticated,
+          'Войдите в аккаунт и повторите попытку.',
+          cause: error,
+        );
+      }
+
+      if (error.statusCode == 403) {
+        throw OrderCreationException(
           OrderCreationFailure.permissionDenied,
-          'Не удалось создать заказ. Проверьте вход в аккаунт.',
+          'Нет доступа к созданию заказа.',
           cause: error,
-        ),
-        'unavailable' || 'deadline-exceeded' => OrderCreationException(
-          OrderCreationFailure.unavailable,
-          'Нет связи с сервером. Попробуйте ещё раз.',
+        );
+      }
+
+      if (error.statusCode == 409) {
+        throw OrderCreationException(
+          OrderCreationFailure.activeOrderExists,
+          'У вас уже есть активный заказ.',
           cause: error,
-        ),
-        _ => OrderCreationException(
-          OrderCreationFailure.unknown,
-          'Не удалось создать заказ. Попробуйте ещё раз.',
+        );
+      }
+
+      if (error.statusCode == 400) {
+        final minimumFare = error.data?['minimumFare'];
+
+        if (minimumFare is int) {
+          throw OrderCreationException(
+            OrderCreationFailure.belowMinimumFare,
+            'Минимальная стоимость поездки сейчас — $minimumFare ₸.',
+            cause: error,
+            minimumFare: minimumFare,
+          );
+        }
+
+        throw OrderCreationException(
+          OrderCreationFailure.invalidData,
+          error.message,
           cause: error,
-        ),
-      };
-      Error.throwWithStackTrace(mapped, stackTrace);
-    } catch (error, stackTrace) {
-      _logFailure(error, stackTrace, userId: userId, orderId: orderRef.id);
-      Error.throwWithStackTrace(
-        OrderCreationException(
-          OrderCreationFailure.unknown,
-          'Не удалось создать заказ. Попробуйте ещё раз.',
-          cause: error,
-        ),
-        stackTrace,
+        );
+      }
+
+      throw OrderCreationException(
+        OrderCreationFailure.unknown,
+        'Не удалось создать заказ. Попробуйте ещё раз.',
+        cause: error,
+      );
+    } on TimeoutException catch (error) {
+      throw OrderCreationException(
+        OrderCreationFailure.unavailable,
+        'Нет связи с сервером. Попробуйте ещё раз.',
+        cause: error,
       );
     }
-  }
-
-  void _logFailure(
-    Object error,
-    StackTrace stackTrace, {
-    required String userId,
-    required String orderId,
-  }) {
-    debugPrint(
-      '[OrderCreation] failed uid=$userId orderId=$orderId '
-      'type=${error.runtimeType} error=$error',
-    );
-    debugPrintStack(stackTrace: stackTrace);
   }
 }
 
 class OrderCreationService {
-  OrderCreationService({OrderCreationGateway? gateway})
-    : _gateway = gateway ?? FirebaseOrderCreationGateway();
+  OrderCreationService({
+    OrderCreationGateway? gateway,
+    MinimumFareService? minimumFareService,
+  }) : _gateway = gateway ?? VpsOrderCreationGateway(),
+       _minimumFareService = minimumFareService ?? MinimumFareService();
 
   final OrderCreationGateway _gateway;
+  final MinimumFareService _minimumFareService;
+
   Future<String>? _inFlight;
+
+  int get currentMinimumFare => _minimumFareService.currentMinimumFare;
+
+  int priceWithCurrentMinimum(int proposedPrice) =>
+      _minimumFareService.priceWithMinimum(proposedPrice);
+
+  String minimumFareMessage(int minimumFare) =>
+      _minimumFareService.messageForMinimum(minimumFare);
 
   Future<String> createOrder({
     required String fromAddress,
@@ -231,7 +232,10 @@ class OrderCreationService {
     required String cityId,
   }) {
     final current = _inFlight;
-    if (current != null) return current;
+
+    if (current != null) {
+      return current;
+    }
 
     final draft = OrderDraft(
       fromAddress: fromAddress,
@@ -241,14 +245,28 @@ class OrderCreationService {
       toPoint: toPoint,
       cityId: cityId,
     );
+
     final operation = _create(draft);
+
     _inFlight = operation;
+
     return operation;
   }
 
   Future<String> _create(OrderDraft draft) async {
     try {
       draft.validate();
+
+      final minimumFare = _minimumFareService.currentMinimumFare;
+
+      if (draft.price < minimumFare) {
+        throw OrderCreationException(
+          OrderCreationFailure.belowMinimumFare,
+          _minimumFareService.messageForMinimum(minimumFare),
+          minimumFare: minimumFare,
+        );
+      }
+
       return await _gateway.create(draft);
     } finally {
       _inFlight = null;

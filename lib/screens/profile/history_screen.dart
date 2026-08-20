@@ -1,90 +1,216 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
+import '../../services/tulpar_api_client.dart';
 import '../../widgets/app_drawer.dart';
 
-class HistoryScreen extends StatelessWidget {
+class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
 
   @override
+  State<HistoryScreen> createState() => _HistoryScreenState();
+}
+
+class _HistoryScreenState extends State<HistoryScreen> {
+  final TulparApiClient _api = TulparApiClient();
+
+  late Future<List<Map<String, dynamic>>> _historyFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _historyFuture = _api.getOrderHistory();
+  }
+
+  Future<void> _refresh() async {
+    final future = _api.getOrderHistory();
+
+    setState(() {
+      _historyFuture = future;
+    });
+
+    await future;
+  }
+
+  String _price(Map<String, dynamic> order) {
+    final value =
+        order['price'] ?? order['agreedPrice'] ?? order['passengerPrice'] ?? 0;
+
+    return value.toString();
+  }
+
+  String _address(dynamic value) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? '???? ?? ??????' : text;
+  }
+
+  String _dateText(Map<String, dynamic> order) {
+    final raw =
+        order['completedAt'] ?? order['cancelledAt'] ?? order['createdAt'];
+
+    if (raw == null) return '';
+
+    final date = DateTime.tryParse(raw.toString())?.toLocal();
+
+    if (date == null) return '';
+
+    final day = date.day.toString().padLeft(2, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final year = date.year.toString();
+
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+
+    return '$day.$month.$year  $hour:$minute';
+  }
+
+  String _roleText(Map<String, dynamic> order) {
+    return order['role'] == 'driver' ? '? ? ????????' : '? ? ????????';
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final currentUser = FirebaseAuth.instance.currentUser;
     final mode = appModeFromRoute(context);
 
-    if (currentUser == null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('История поездок')),
-        drawer: AppDrawer(mode: mode),
-        body: const Center(child: Text('Вы не авторизованы')),
-      );
-    }
-
     return Scaffold(
-      appBar: AppBar(title: const Text('История поездок')),
+      appBar: AppBar(title: const Text('?????? ???????')),
       drawer: AppDrawer(mode: mode),
-      body: StreamBuilder<QuerySnapshot>(
-        // Исправлено: запрашиваем записи только текущего пользователя
-        stream: FirebaseFirestore.instance
-            .collection('orders')
-            .where(
-              Filter.or(
-                Filter('passengerId', isEqualTo: currentUser.uid),
-                Filter('driverId', isEqualTo: currentUser.uid),
-              ),
-            )
-            .snapshots(),
+      body: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _historyFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
 
           if (snapshot.hasError) {
-            return Center(child: Text('Ошибка загрузки: ${snapshot.error}'));
-          }
-
-          final docs = snapshot.data?.docs ?? [];
-
-          // Фильтруем завершенные и отмененные заказы локально
-          final historyDocs = docs.where((doc) {
-            final data = doc.data() as Map<String, dynamic>;
-            final status = data['status'];
-            return status == 'completed' || status == 'cancelled';
-          }).toList();
-
-          if (historyDocs.isEmpty) {
-            return const Center(
-              child: Text('У вас пока нет завершенных поездок'),
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.cloud_off_outlined,
+                      size: 48,
+                      color: Colors.grey,
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      '? ??????? ????????? ??????? ???????.',
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: _refresh,
+                      child: const Text('????????'),
+                    ),
+                  ],
+                ),
+              ),
             );
           }
 
-          return ListView.builder(
-            itemCount: historyDocs.length,
-            itemBuilder: (context, index) {
-              final order = historyDocs[index].data() as Map<String, dynamic>;
-              final isCompleted = order['status'] == 'completed';
+          final orders = snapshot.data ?? const [];
 
-              return Card(
-                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: ListTile(
-                  leading: Icon(
-                    isCompleted ? Icons.check_circle : Icons.cancel,
-                    color: isCompleted ? Colors.green : Colors.red,
+          if (orders.isEmpty) {
+            return RefreshIndicator(
+              onRefresh: _refresh,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [
+                  SizedBox(height: 180),
+                  Icon(Icons.history, size: 56, color: Colors.grey),
+                  SizedBox(height: 12),
+                  Center(child: Text('? ??? ???? ??? ??????????? ???????')),
+                ],
+              ),
+            );
+          }
+
+          return RefreshIndicator(
+            onRefresh: _refresh,
+            child: ListView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              itemCount: orders.length,
+              itemBuilder: (context, index) {
+                final order = orders[index];
+
+                final isCompleted = order['status'] == 'completed';
+
+                final from = _address(order['fromAddress']);
+                final to = _address(order['toAddress']);
+                final date = _dateText(order);
+
+                return Card(
+                  margin: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 6,
                   ),
-                  title: Text(
-                    '${order['fromAddress'] ?? ''} → ${order['toAddress'] ?? ''}',
-                  ),
-                  subtitle: Text('Цена: ${order['price'] ?? 0} ₸'),
-                  trailing: Text(
-                    isCompleted ? 'Завершен' : 'Отменен',
-                    style: TextStyle(
-                      color: isCompleted ? Colors.green : Colors.red,
-                      fontWeight: FontWeight.bold,
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          isCompleted ? Icons.check_circle : Icons.cancel,
+                          color: isCompleted ? Colors.green : Colors.red,
+                          size: 30,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '$from ? $to',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 15,
+                                ),
+                              ),
+                              const SizedBox(height: 7),
+                              Text(
+                                '${_price(order)} ?',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _roleText(order),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                              if (date.isNotEmpty) ...[
+                                const SizedBox(height: 2),
+                                Text(
+                                  date,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          isCompleted ? '???????' : '??????',
+                          style: TextStyle(
+                            color: isCompleted ? Colors.green : Colors.red,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           );
         },
       ),

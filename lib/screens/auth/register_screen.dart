@@ -16,7 +16,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _confirmPasswordController = TextEditingController();
+  final TextEditingController _confirmPasswordController =
+      TextEditingController();
 
   bool _isPasswordHidden = true;
   bool _isConfirmPasswordHidden = true;
@@ -59,7 +60,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (errorMessage != null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(errorMessage), backgroundColor: Colors.redAccent),
+            SnackBar(
+              content: Text(errorMessage),
+              backgroundColor: Colors.redAccent,
+            ),
           );
         }
         return;
@@ -91,6 +95,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       appBar: AppBar(
@@ -101,7 +107,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24.0,
+              vertical: 16.0,
+            ),
             child: Form(
               key: _formKey,
               child: Column(
@@ -120,20 +129,35 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   const SizedBox(height: 32),
 
                   TextFormField(
+                    key: const Key('register_name_field'),
                     controller: _nameController,
                     textCapitalization: TextCapitalization.words,
-                    style: const TextStyle(color: Colors.white),
+                    style: TextStyle(color: colorScheme.onSurface),
+                    cursorColor: colorScheme.primary,
+                    cursorErrorColor: colorScheme.error,
                     decoration: InputDecoration(
                       labelText: 'Имя',
-                      labelStyle: const TextStyle(color: Colors.grey),
-                      prefixIcon: const Icon(Icons.person, color: Colors.amber),
+                      labelStyle: TextStyle(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                      hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
+                      errorStyle: TextStyle(color: colorScheme.error),
+                      filled: true,
+                      fillColor: colorScheme.surfaceContainerHighest,
+                      prefixIcon: Icon(
+                        Icons.person,
+                        color: colorScheme.primary,
+                      ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: const BorderSide(color: Colors.grey),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.amber, width: 2),
+                        borderSide: const BorderSide(
+                          color: Colors.amber,
+                          width: 2,
+                        ),
                       ),
                     ),
                     validator: (value) {
@@ -150,23 +174,34 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
                   // 1. Поле телефона с маской +7 (xxx) xxx-xx-xx
                   TextFormField(
+                    key: const Key('register_phone_field'),
                     controller: _phoneController,
                     keyboardType: TextInputType.phone,
                     inputFormatters: [_phoneFormatter],
-                    style: const TextStyle(color: Colors.white),
+                    style: TextStyle(color: colorScheme.onSurface),
+                    cursorColor: colorScheme.primary,
+                    cursorErrorColor: colorScheme.error,
                     decoration: InputDecoration(
                       labelText: 'Номер телефона',
-                      labelStyle: const TextStyle(color: Colors.grey),
+                      labelStyle: TextStyle(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
                       hintText: '+7 (700) 000-00-00',
-                      hintStyle: TextStyle(color: Colors.grey.shade600),
-                      prefixIcon: const Icon(Icons.phone, color: Colors.amber),
+                      hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
+                      errorStyle: TextStyle(color: colorScheme.error),
+                      filled: true,
+                      fillColor: colorScheme.surfaceContainerHighest,
+                      prefixIcon: Icon(Icons.phone, color: colorScheme.primary),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: const BorderSide(color: Colors.grey),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.amber, width: 2),
+                        borderSide: const BorderSide(
+                          color: Colors.amber,
+                          width: 2,
+                        ),
                       ),
                       errorBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -174,7 +209,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                       focusedErrorBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.redAccent, width: 2),
+                        borderSide: const BorderSide(
+                          color: Colors.redAccent,
+                          width: 2,
+                        ),
                       ),
                     ),
                     validator: (value) {
@@ -192,17 +230,31 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
                   // 2. Поле ввода пароля
                   TextFormField(
+                    key: const Key('register_password_field'),
                     controller: _passwordController,
                     obscureText: _isPasswordHidden,
-                    style: const TextStyle(color: Colors.white),
+                    style: TextStyle(color: colorScheme.onSurface),
+                    cursorColor: colorScheme.primary,
+                    cursorErrorColor: colorScheme.error,
                     decoration: InputDecoration(
                       labelText: 'Пароль',
-                      labelStyle: const TextStyle(color: Colors.grey),
-                      prefixIcon: const Icon(Icons.lock_outline, color: Colors.amber),
+                      labelStyle: TextStyle(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                      hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
+                      errorStyle: TextStyle(color: colorScheme.error),
+                      filled: true,
+                      fillColor: colorScheme.surfaceContainerHighest,
+                      prefixIcon: Icon(
+                        Icons.lock_outline,
+                        color: colorScheme.primary,
+                      ),
                       suffixIcon: IconButton(
                         icon: Icon(
-                          _isPasswordHidden ? Icons.visibility_off : Icons.visibility,
-                          color: Colors.grey,
+                          _isPasswordHidden
+                              ? Icons.visibility_off
+                              : Icons.visibility,
+                          color: colorScheme.onSurfaceVariant,
                         ),
                         onPressed: () {
                           setState(() {
@@ -216,7 +268,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.amber, width: 2),
+                        borderSide: const BorderSide(
+                          color: Colors.amber,
+                          width: 2,
+                        ),
                       ),
                       errorBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -224,7 +279,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                       focusedErrorBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.redAccent, width: 2),
+                        borderSide: const BorderSide(
+                          color: Colors.redAccent,
+                          width: 2,
+                        ),
                       ),
                     ),
                     validator: (value) {
@@ -241,21 +299,33 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
                   // 3. Поле повтора пароля с проверкой совпадения
                   TextFormField(
+                    key: const Key('register_confirm_password_field'),
                     controller: _confirmPasswordController,
                     obscureText: _isConfirmPasswordHidden,
-                    style: const TextStyle(color: Colors.white),
+                    style: TextStyle(color: colorScheme.onSurface),
+                    cursorColor: colorScheme.primary,
+                    cursorErrorColor: colorScheme.error,
                     decoration: InputDecoration(
                       labelText: 'Повторите пароль',
-                      labelStyle: const TextStyle(color: Colors.grey),
-                      prefixIcon: const Icon(Icons.lock, color: Colors.amber),
+                      labelStyle: TextStyle(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                      hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
+                      errorStyle: TextStyle(color: colorScheme.error),
+                      filled: true,
+                      fillColor: colorScheme.surfaceContainerHighest,
+                      prefixIcon: Icon(Icons.lock, color: colorScheme.primary),
                       suffixIcon: IconButton(
                         icon: Icon(
-                          _isConfirmPasswordHidden ? Icons.visibility_off : Icons.visibility,
-                          color: Colors.grey,
+                          _isConfirmPasswordHidden
+                              ? Icons.visibility_off
+                              : Icons.visibility,
+                          color: colorScheme.onSurfaceVariant,
                         ),
                         onPressed: () {
                           setState(() {
-                            _isConfirmPasswordHidden = !_isConfirmPasswordHidden;
+                            _isConfirmPasswordHidden =
+                                !_isConfirmPasswordHidden;
                           });
                         },
                       ),
@@ -265,7 +335,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.amber, width: 2),
+                        borderSide: const BorderSide(
+                          color: Colors.amber,
+                          width: 2,
+                        ),
                       ),
                       errorBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -273,7 +346,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                       focusedErrorBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.redAccent, width: 2),
+                        borderSide: const BorderSide(
+                          color: Colors.redAccent,
+                          width: 2,
+                        ),
                       ),
                     ),
                     validator: (value) {
@@ -304,7 +380,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           ? const CircularProgressIndicator(color: Colors.black)
                           : const Text(
                               'Зарегистрироваться',
-                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                     ),
                   ),

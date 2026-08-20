@@ -1,13 +1,18 @@
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'active_order_service.dart';
+import 'startup_diagnostics.dart';
+import 'user_profile_recovery_service.dart';
 
-enum SplashTarget { login, map, passengerOrder, driverOrder }
+enum SplashTarget { login, profileRecovery, map, passengerOrder, driverOrder }
 
 class SplashDestination {
   const SplashDestination._(this.target, this.activeOrder);
 
   const SplashDestination.login() : this._(SplashTarget.login, null);
+
+  const SplashDestination.profileRecovery()
+    : this._(SplashTarget.profileRecovery, null);
 
   const SplashDestination.map() : this._(SplashTarget.map, null);
 
@@ -24,23 +29,35 @@ class SplashDestination {
 class SplashStartupService {
   SplashStartupService({
     Future<bool> Function()? authLoader,
+    Future<UserProfileRecoveryResult> Function()? profileRecoveryLoader,
     Future<ActiveOrder?> Function()? activeOrderLoader,
   }) : _authLoader = authLoader ?? _loadAuth,
+       _profileRecoveryLoader =
+           profileRecoveryLoader ??
+           UserProfileRecoveryService().inspectAndRepair,
        _activeOrderLoader =
            activeOrderLoader ?? ActiveOrderService().findCurrentOrder;
 
   final Future<bool> Function() _authLoader;
+  final Future<UserProfileRecoveryResult> Function() _profileRecoveryLoader;
   final Future<ActiveOrder?> Function() _activeOrderLoader;
 
   Future<SplashDestination> loadDestination() async {
-    final results = await Future.wait<Object?>([
-      _authLoader(),
-      _activeOrderLoader(),
-    ]);
-    final isSignedIn = results[0] as bool;
-    final activeOrder = results[1] as ActiveOrder?;
-
+    final isSignedIn = await _authLoader();
+    StartupDiagnostics.mark('auth resolved');
     if (!isSignedIn) return const SplashDestination.login();
+
+    // Keep the profile gate first: an incomplete legacy profile must not
+    // continue into order routing. The branded splash remains visible while
+    // this read is in progress, so the user never sees a blank loading screen.
+    final recovery = await _profileRecoveryLoader();
+    StartupDiagnostics.mark('profile recovery resolved');
+    if (!recovery.allowsAppAccess) {
+      return const SplashDestination.profileRecovery();
+    }
+
+    final activeOrder = await _activeOrderLoader();
+    StartupDiagnostics.mark('active order lookup resolved');
     if (activeOrder == null) return const SplashDestination.map();
     return activeOrder.isDriver
         ? SplashDestination.driverOrder(activeOrder)
@@ -50,7 +67,7 @@ class SplashStartupService {
   SplashDestination fallbackDestination() {
     return FirebaseAuth.instance.currentUser == null
         ? const SplashDestination.login()
-        : const SplashDestination.map();
+        : const SplashDestination.profileRecovery();
   }
 
   static Future<bool> _loadAuth() async {

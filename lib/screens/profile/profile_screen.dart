@@ -103,11 +103,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
           backgroundColor: Colors.green,
         ),
       );
+    } on FirebaseException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error.code == 'permission-denied'
+                ? 'Профиль имеет старый формат. Если после заполнения имени ошибка повторится, проверьте uid, телефон, роль и дату создания в Firebase.'
+                : 'Не удалось сохранить профиль: ${error.code}.',
+          ),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Не удалось сохранить имя'),
+          content: Text('Не удалось сохранить профиль.'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -189,6 +201,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     controller: _carController,
                     decoration: const InputDecoration(
                       labelText: 'Марка и модель авто (для водителя)',
+                      helperText: 'Пассажиру это поле заполнять не обязательно',
                       prefixIcon: Icon(Icons.directions_car_outlined),
                     ),
                   ),

@@ -1,13 +1,14 @@
 import 'dart:async';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../firebase_options.dart';
 import '../screens/chat/chat_screen.dart';
+import 'tulpar_api_client.dart';
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -18,14 +19,14 @@ class PushNotificationService {
   PushNotificationService({
     FirebaseMessaging? messaging,
     FirebaseAuth? auth,
-    FirebaseFirestore? firestore,
-  })  : _messaging = messaging ?? FirebaseMessaging.instance,
-        _auth = auth ?? FirebaseAuth.instance,
-        _firestore = firestore ?? FirebaseFirestore.instance;
+    TulparApiClient? apiClient,
+  }) : _messaging = messaging ?? FirebaseMessaging.instance,
+       _auth = auth ?? FirebaseAuth.instance,
+       _apiClient = apiClient ?? TulparApiClient();
 
   final FirebaseMessaging _messaging;
   final FirebaseAuth _auth;
-  final FirebaseFirestore _firestore;
+  final TulparApiClient _apiClient;
   StreamSubscription<String>? _tokenSubscription;
   StreamSubscription<User?>? _authSubscription;
 
@@ -39,8 +40,12 @@ class PushNotificationService {
     _authSubscription = _auth.authStateChanges().listen((user) {
       if (user != null) _saveCurrentToken(user.uid);
     });
-    _tokenSubscription = _messaging.onTokenRefresh.listen(_saveTokenForCurrentUser);
+    _tokenSubscription = _messaging.onTokenRefresh.listen(
+      _saveTokenForCurrentUser,
+    );
     FirebaseMessaging.onMessage.listen((message) {
+      SystemSound.play(SystemSoundType.alert);
+
       final orderId = message.data['orderId'];
       final body = message.notification?.body ?? 'Новое сообщение в чате';
       messengerKey.currentState?.showSnackBar(
@@ -77,29 +82,30 @@ class PushNotificationService {
   }
 
   Future<void> _saveToken(String uid, String token) async {
-    final tokenRef = _firestore.collection('users').doc(uid).collection('fcmTokens').doc(token);
-    final existing = await tokenRef.get();
-    if (existing.exists) {
-      await tokenRef.update({'updatedAt': FieldValue.serverTimestamp()});
-      return;
+    try {
+      await _apiClient.registerPushToken(token: token, platform: 'android');
+      debugPrint('[PushToken] token registered on VPS');
+    } catch (error, stackTrace) {
+      debugPrint('[PushToken] failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
     }
-
-    await tokenRef.set({
-      'token': token,
-      'platform': 'android',
-      'createdAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
   }
 
-  void _openChatFromMessage(GlobalKey<NavigatorState> navigatorKey, RemoteMessage message) {
+  void _openChatFromMessage(
+    GlobalKey<NavigatorState> navigatorKey,
+    RemoteMessage message,
+  ) {
     final orderId = message.data['orderId'];
-    if (orderId is String && orderId.isNotEmpty) _openChat(navigatorKey, orderId);
+    if (orderId is String && orderId.isNotEmpty) {
+      _openChat(navigatorKey, orderId);
+    }
   }
 
   void _openChat(GlobalKey<NavigatorState> navigatorKey, String orderId) {
     navigatorKey.currentState?.push(
-      MaterialPageRoute(builder: (_) => ChatScreen(orderId: orderId, peerName: 'Чат')),
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(orderId: orderId, peerName: 'Чат'),
+      ),
     );
   }
 

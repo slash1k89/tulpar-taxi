@@ -7,10 +7,14 @@ class DriverAgreementScreen extends StatefulWidget {
     super.key,
     required this.userId,
     this.agreementService,
+    this.onAccept,
+    this.onAccepted,
   });
 
   final String userId;
   final DriverAgreementService? agreementService;
+  final Future<void> Function()? onAccept;
+  final Future<void> Function()? onAccepted;
 
   @override
   State<DriverAgreementScreen> createState() => _DriverAgreementScreenState();
@@ -25,9 +29,18 @@ class _DriverAgreementScreenState extends State<DriverAgreementScreen> {
 
     setState(() => _isSaving = true);
     try {
-      await (widget.agreementService ?? DriverAgreementService())
-          .acceptCurrentAgreement(widget.userId);
-      if (mounted) Navigator.pop(context, true);
+      if (widget.onAccept != null) {
+        await widget.onAccept!();
+      } else {
+        await (widget.agreementService ?? DriverAgreementService())
+            .acceptCurrentAgreement(widget.userId);
+      }
+      if (!mounted) return;
+      if (widget.onAccepted != null) {
+        await widget.onAccepted!();
+      } else {
+        Navigator.pop(context, true);
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

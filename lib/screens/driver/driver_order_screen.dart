@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../chat/chat_screen.dart';
-import '../../services/order_workflow_service.dart';
 import '../../services/driver_tracking_service.dart';
+import '../../services/order_workflow_service.dart';
+import '../../services/tulpar_api_client.dart';
 
 class DriverOrderScreen extends StatefulWidget {
-  final String orderId;
-
   const DriverOrderScreen({super.key, required this.orderId});
+
+  final String orderId;
 
   @override
   State<DriverOrderScreen> createState() => _DriverOrderScreenState();
@@ -15,7 +16,10 @@ class DriverOrderScreen extends StatefulWidget {
 
 class _DriverOrderScreenState extends State<DriverOrderScreen> {
   bool _isUpdating = false;
+
   final DriverTrackingService _tracking = DriverTrackingService();
+  final TulparApiClient _apiClient = TulparApiClient();
+
   String? _trackingMessage;
 
   @override
@@ -26,6 +30,7 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
 
   Future<void> _startTracking() async {
     final result = await _tracking.startLocationUpdates(widget.orderId);
+
     if (mounted && !result.isStarted) {
       setState(() => _trackingMessage = result.message);
     }
@@ -38,6 +43,8 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
   }
 
   Future<void> _updateStatus(String newStatus) async {
+    if (_isUpdating) return;
+
     setState(() {
       _isUpdating = true;
     });
@@ -47,14 +54,15 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
         orderId: widget.orderId,
         nextStatus: newStatus,
       );
+
       if (newStatus == 'completed') {
         await _tracking.stopLocationUpdates(widget.orderId);
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка обновления статуса: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('шибка обновления статуса: $e')));
       }
     } finally {
       if (mounted) {
@@ -67,47 +75,97 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('orders')
-          .doc(widget.orderId)
-          .snapshots(),
+    return StreamBuilder<Map<String, dynamic>?>(
+      stream: _apiClient.watchOrderDetails(widget.orderId),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
           return const Scaffold(
             backgroundColor: Color(0xFF121212),
             body: Center(child: CircularProgressIndicator(color: Colors.amber)),
           );
         }
 
-        if (!snapshot.hasData || !snapshot.data!.exists) {
-          return const Scaffold(
-            backgroundColor: Color(0xFF121212),
+        if (snapshot.hasError) {
+          return Scaffold(
+            backgroundColor: const Color(0xFF121212),
+            appBar: AppBar(
+              title: const Text('аказ'),
+              backgroundColor: const Color(0xFF1E1E1E),
+              foregroundColor: Colors.amber,
+            ),
             body: Center(
-              child: Text('Заказ не найден', style: TextStyle(color: Colors.white)),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  'е удалось загрузить заказ.\n${snapshot.error}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+              ),
             ),
           );
         }
 
-        final data = snapshot.data!.data() as Map<String, dynamic>? ?? {};
-        final status = data['status'] ?? 'accepted';
+        final data = snapshot.data;
 
-        String statusTitle = 'Едем к клиенту';
-        String buttonText = 'На месте';
+        if (data == null || data.isEmpty) {
+          return const Scaffold(
+            backgroundColor: Color(0xFF121212),
+            body: Center(
+              child: Text(
+                'аказ не найден',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          );
+        }
+
+        final status = data['status']?.toString() ?? 'accepted';
+
+        String statusTitle = 'дем к клиенту';
+        String buttonText = 'а месте';
         String nextStatus = 'arrived';
         Color buttonColor = Colors.amber;
+        bool showStatusButton = true;
 
-        if (status == 'arrived') {
-          statusTitle = 'Ожидание клиента';
-          buttonText = 'Начать поездку';
+        if (status == 'arrived' || status == 'driver_arrived') {
+          statusTitle = 'жидание клиента';
+          buttonText = 'ачать поездку';
           nextStatus = 'in_progress';
           buttonColor = Colors.green;
         } else if (status == 'in_progress') {
-          statusTitle = 'Поездка в процессе';
-          buttonText = 'Завершить поездку';
+          statusTitle = 'оездка в процессе';
+          buttonText = 'авершить поездку';
           nextStatus = 'completed';
           buttonColor = Colors.redAccent;
+        } else if (status == 'completed') {
+          statusTitle = 'оездка завершена';
+          showStatusButton = false;
+        } else if (status == 'cancelled') {
+          statusTitle = 'аказ отменён';
+          showStatusButton = false;
+        } else if (status == 'searching') {
+          statusTitle = 'оиск водителя';
+          showStatusButton = false;
         }
+
+        final passengerName = data['passengerName']?.toString().trim() ?? '';
+
+        final passengerPhone = data['passengerPhone']?.toString().trim() ?? '';
+
+        final fromAddress =
+            (data['fromAddress'] ?? data['pickupAddress'])?.toString().trim() ??
+            '';
+
+        final toAddress =
+            (data['toAddress'] ?? data['destinationAddress'])
+                ?.toString()
+                .trim() ??
+            '';
+
+        final price =
+            data['price'] ?? data['agreedPrice'] ?? data['passengerPrice'] ?? 0;
 
         return Scaffold(
           backgroundColor: const Color(0xFF121212),
@@ -125,7 +183,9 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
                     MaterialPageRoute(
                       builder: (_) => ChatScreen(
                         orderId: widget.orderId,
-                        peerName: data['passengerName'] ?? 'Пассажир',
+                        peerName: passengerName.isNotEmpty
+                            ? passengerName
+                            : 'ассажир',
                       ),
                     ),
                   );
@@ -134,7 +194,7 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
             ],
           ),
           body: Padding(
-            padding: const EdgeInsets.all(20.0),
+            padding: const EdgeInsets.all(20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -148,36 +208,48 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
                   ),
                 Card(
                   color: const Color(0xFF1E1E1E),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
                   child: Padding(
-                    padding: const EdgeInsets.all(16.0),
+                    padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Пассажир: ${data['passengerName'] ?? 'Пассажир'}',
+                          'ассажир: ${passengerName.isNotEmpty ? passengerName : 'ассажир'}',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
-                        if ((data['passengerPhone'] ?? '').isNotEmpty) ...[
+                        if (passengerPhone.isNotEmpty) ...[
                           const SizedBox(height: 6),
                           Text(
-                            'Тел: ${data['passengerPhone']}',
-                            style: const TextStyle(color: Colors.white70, fontSize: 15),
+                            'Тел: $passengerPhone',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 15,
+                            ),
                           ),
                         ],
                         const Divider(color: Colors.white24, height: 24),
                         Row(
                           children: [
-                            const Icon(Icons.my_location, color: Colors.green, size: 20),
+                            const Icon(
+                              Icons.my_location,
+                              color: Colors.green,
+                              size: 20,
+                            ),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                'Откуда: ${data['fromAddress'] ?? ''}',
-                                style: const TextStyle(color: Colors.white70, fontSize: 14),
+                                'ткуда: $fromAddress',
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 14,
+                                ),
                               ),
                             ),
                           ],
@@ -185,12 +257,19 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
                         const SizedBox(height: 10),
                         Row(
                           children: [
-                            const Icon(Icons.location_on, color: Colors.red, size: 20),
+                            const Icon(
+                              Icons.location_on,
+                              color: Colors.red,
+                              size: 20,
+                            ),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                'Куда: ${data['toAddress'] ?? ''}',
-                                style: const TextStyle(color: Colors.white70, fontSize: 14),
+                                'уда: $toAddress',
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 14,
+                                ),
                               ),
                             ),
                           ],
@@ -201,10 +280,13 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
                           children: [
                             const Text(
                               'Стоимость:',
-                              style: TextStyle(color: Colors.white70, fontSize: 16),
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 16,
+                              ),
                             ),
                             Text(
-                              '${data['price'] ?? 500} ₸',
+                              '$price ₸',
                               style: const TextStyle(
                                 color: Colors.amber,
                                 fontSize: 22,
@@ -218,29 +300,38 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
                   ),
                 ),
                 const Spacer(),
-                SizedBox(
-                  width: double.infinity,
-                  height: 54,
-                  child: ElevatedButton(
-                    onPressed: _isUpdating ? null : () => _updateStatus(nextStatus),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: buttonColor,
-                      foregroundColor: Colors.black,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
+                if (showStatusButton)
+                  SizedBox(
+                    width: double.infinity,
+                    height: 54,
+                    child: ElevatedButton(
+                      onPressed: _isUpdating
+                          ? null
+                          : () => _updateStatus(nextStatus),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: buttonColor,
+                        foregroundColor: Colors.black,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
                       ),
-                    ),
-                    child: _isUpdating
-                        ? const CircularProgressIndicator(color: Colors.black)
-                        : Text(
-                            buttonText,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
+                      child: _isUpdating
+                          ? const SizedBox.square(
+                              dimension: 24,
+                              child: CircularProgressIndicator(
+                                color: Colors.black,
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : Text(
+                              buttonText,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
-                          ),
+                    ),
                   ),
-                ),
               ],
             ),
           ),
