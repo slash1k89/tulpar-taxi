@@ -40,7 +40,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   String _address(dynamic value) {
     final text = value?.toString().trim() ?? '';
-    return text.isEmpty ? '???? ?? ??????' : text;
+    return text.isEmpty ? 'Адрес не указан' : text;
   }
 
   String _dateText(Map<String, dynamic> order) {
@@ -64,7 +64,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   String _roleText(Map<String, dynamic> order) {
-    return order['role'] == 'driver' ? '? ? ????????' : '? ? ????????';
+    return order['role'] == 'driver' ? 'Я — водитель' : 'Я — пассажир';
   }
 
   @override
@@ -72,7 +72,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final mode = appModeFromRoute(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('?????? ???????')),
+      appBar: AppBar(title: const Text('История поездок')),
       drawer: AppDrawer(mode: mode),
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: _historyFuture,
@@ -95,13 +95,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     ),
                     const SizedBox(height: 12),
                     const Text(
-                      '? ??????? ????????? ??????? ???????.',
+                      'Не удалось загрузить историю поездок.',
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 16),
                     ElevatedButton(
                       onPressed: _refresh,
-                      child: const Text('????????'),
+                      child: const Text('Повторить'),
                     ),
                   ],
                 ),
@@ -120,7 +120,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   SizedBox(height: 180),
                   Icon(Icons.history, size: 56, color: Colors.grey),
                   SizedBox(height: 12),
-                  Center(child: Text('? ??? ???? ??? ??????????? ???????')),
+                  Center(child: Text('У вас пока нет завершённых поездок')),
                 ],
               ),
             );
@@ -198,7 +198,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          isCompleted ? '???????' : '??????',
+                          isCompleted ? 'Завершен' : 'Отменен',
                           style: TextStyle(
                             color: isCompleted ? Colors.green : Colors.red,
                             fontWeight: FontWeight.bold,

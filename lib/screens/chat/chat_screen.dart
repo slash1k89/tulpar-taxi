@@ -112,23 +112,23 @@ class _ChatScreenState extends State<ChatScreen> {
     if (error is TulparApiException) {
       switch (error.statusCode) {
         case 400:
-          return '????????? ?????? ????????? ?? 1 ?? 2000 ????????.';
+          return 'Сообщение должно содержать от 1 до 2000 символов.';
 
         case 401:
-          return '?????? ? ??????? ? ????????? ???????.';
+          return 'Ошибка в данных или параметрах запроса.';
 
         case 403:
-          return '?? ??????? ? ???? ???? ???????.';
+          return 'У вас нет доступа к этому заказу.';
 
         case 404:
-          return '?????? ?? ???????.';
+          return 'Заказ не найден.';
 
         default:
           return error.message;
       }
     }
 
-    return '? ??????? ????????? ? ????????.';
+    return 'Не удалось отправить сообщение.';
   }
 
   DateTime? _parseDate(dynamic value) {
@@ -188,7 +188,7 @@ class _ChatScreenState extends State<ChatScreen> {
               const SizedBox(height: 12),
               ElevatedButton(
                 onPressed: _loadMessages,
-                child: const Text('????????'),
+                child: const Text('Повторить'),
               ),
             ],
           ),
@@ -197,7 +197,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     if (_messages.isEmpty) {
-      return const Center(child: Text('?? ?????????. ??????? ??????!'));
+      return const Center(child: Text('Нет сообщений. Напишите первым!'));
     }
 
     return RefreshIndicator(
@@ -285,7 +285,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 minLines: 1,
                 maxLines: 4,
                 decoration: const InputDecoration(
-                  hintText: '?????????...',
+                  hintText: 'Сообщение...',
                   border: InputBorder.none,
                   counterText: '',
                 ),

@@ -79,7 +79,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     _routeGeometryCache = OrderRouteGeometryCache(
       loader: widget.routeLoader,
       onFailure: (error, stackTrace) {
-        debugPrint('?????? ???????? ???????? ?????? ${widget.orderId}: $error');
+        debugPrint('Ошибка загрузки маршрута заказа ${widget.orderId}: $error');
         debugPrintStack(stackTrace: stackTrace);
       },
     );
@@ -129,7 +129,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
       try {
         _mapController.move(pos, _defaultZoom);
       } catch (e) {
-        debugPrint("?????? ??????????? ?????: $e");
+        debugPrint("Ошибка перемещения карты: $e");
       }
     }
   }
@@ -182,7 +182,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '${offer.driverName}: ??????????? ${offer.price} ? ???????.',
+            '${offer.driverName}: предложение ${offer.price} ₸ принято.',
           ),
         ),
       );
@@ -215,20 +215,20 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
       SnackBar(
         content: Text(message),
         duration: const Duration(days: 1),
-        action: SnackBarAction(label: '???????', onPressed: () {}),
+        action: SnackBarAction(label: 'Закрыть', onPressed: () {}),
       ),
     );
     return _cancellationSnackBar!.closed.then<void>((_) {});
   }
 
   void _showCancellationError(Object error, StackTrace stackTrace) {
-    debugPrint('?????? ?????? ?????? ${widget.orderId}: $error');
+    debugPrint('Ошибка отмены заказа ${widget.orderId}: $error');
     debugPrintStack(stackTrace: stackTrace);
     if (!mounted || _cancellationController.hasHandledCancellation) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text(
-          '?? ??????? ???????? ?????. ????????? ?????????? ? ????????? ???????.',
+          'Не удалось отменить заказ. Проверьте соединение и повторите попытку.',
         ),
       ),
     );
@@ -307,13 +307,13 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('??? ?????'),
+        title: const Text('Ваш заказ'),
         backgroundColor: Colors.amber,
         foregroundColor: Colors.black,
       ),
       drawer: const AppDrawer(mode: AppMode.passenger),
       body: _isReturningToMap
-          ? const Center(child: Text('????? ???????'))
+          ? const Center(child: Text('Заказ отменён'))
           : StreamBuilder<Map<String, dynamic>?>(
               stream: _orderStream,
               initialData: widget.initialOrderData,
@@ -327,14 +327,14 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
 
                 if (snapshot.hasError && !snapshot.hasData) {
                   return const Center(
-                    child: Text('?????? ???????? ?????? ??????'),
+                    child: Text('Ошибка загрузки данных заказа'),
                   );
                 }
 
                 final orderData = snapshot.data;
                 if (orderData == null) {
                   return const Center(
-                    child: Text('?????? ???????? ?????? ??????'),
+                    child: Text('Ошибка загрузки данных заказа'),
                   );
                 }
                 final status = orderData['status']?.toString() ?? 'searching';
@@ -357,7 +357,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                 final endpoints = OrderRouteEndpoints.fromOrderData(orderData);
                 if (endpoints == null) {
                   return const Center(
-                    child: Text('???????????? ?????????? ??????'),
+                    child: Text('Некорректные координаты заказа'),
                   );
                 }
                 final passengerFrom = endpoints.start;
@@ -505,7 +505,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             const CircularProgressIndicator(color: Colors.amber),
             const SizedBox(height: 12),
             const Text(
-              '????? ?????????? ????????...',
+              'Поиск свободного водителя...',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
@@ -518,8 +518,8 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                 style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
                 child: Text(
                   _cancellationController.isCancelling
-                      ? '??????...'
-                      : '???????? ?????',
+                      ? 'Отмена...'
+                      : 'Отменить поиск',
                 ),
               ),
             ),
@@ -529,7 +529,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
       case 'accepted':
         return _buildDriverCardWithFallback(
           context,
-          title: '???????? ???? ? ???',
+          title: 'Водитель едет к вам',
           titleColor: Colors.blue,
           orderData: orderData,
           driverId: driverId,
@@ -539,7 +539,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
       case 'arrived':
         return _buildDriverCardWithFallback(
           context,
-          title: '???????? ?? ????? ? ??????? ???!',
+          title: 'Водитель на месте и ожидает вас!',
           titleColor: Colors.green,
           orderData: orderData,
           driverId: driverId,
@@ -553,7 +553,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             const Icon(Icons.directions_car, color: Colors.green, size: 40),
             const SizedBox(height: 8),
             const Text(
-              '??????? ? ????????',
+              'Поездка в процессе',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -561,7 +561,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
               ),
             ),
             const SizedBox(height: 4),
-            Text('???????????: ${orderData['toAddress'] ?? '????? ?? ??????'}'),
+            Text('Направление: ${orderData['toAddress'] ?? 'Адрес не указан'}'),
           ],
         );
 
@@ -572,7 +572,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             Icon(Icons.check_circle, color: Colors.green, size: 48),
             SizedBox(height: 8),
             Text(
-              '??????? ?????????!',
+              'Поездка завершена!',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
           ],
@@ -585,14 +585,14 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             Icon(Icons.cancel, color: Colors.red, size: 48),
             SizedBox(height: 8),
             Text(
-              '????? ???????',
+              'Заказ отменен',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
           ],
         );
 
       default:
-        return Text('?????? ??????: $status');
+        return Text('Статус заказа: $status');
     }
   }
 
@@ -815,9 +815,9 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     bool isArrived = false,
   }) {
     final finalDriverName =
-        driverName ?? orderData['driverName']?.toString() ?? '????????';
+        driverName ?? orderData['driverName']?.toString() ?? 'Водитель';
     final finalCarModel =
-        carModel ?? orderData['carModel']?.toString() ?? '??????????';
+        carModel ?? orderData['carModel']?.toString() ?? 'Автомобиль';
     final finalCarColor = carColor ?? orderData['carColor']?.toString() ?? '';
     final finalCarNumber =
         carNumber ?? orderData['carNumber']?.toString() ?? '';
@@ -849,7 +849,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
               borderRadius: BorderRadius.circular(8),
             ),
             child: const Text(
-              '??????????, ???????? ? ??????????',
+              'Пожалуйста, выходите к автомобилю',
               style: TextStyle(
                 color: Colors.green,
                 fontWeight: FontWeight.w600,
@@ -878,7 +878,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                   ),
                   Text(
                     carDetails.isEmpty
-                        ? '?????? ?????? ???????????...'
+                        ? 'Данные машины загружаются...'
                         : carDetails,
                     style: const TextStyle(color: Colors.grey, fontSize: 13),
                   ),
@@ -893,7 +893,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             Expanded(
               child: ElevatedButton.icon(
                 icon: const Icon(Icons.chat),
-                label: const Text('???'),
+                label: const Text('Чат'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.amber,
                   foregroundColor: Colors.black,
@@ -915,7 +915,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             Expanded(
               child: OutlinedButton.icon(
                 icon: const Icon(Icons.cancel_outlined),
-                label: const Text('????????'),
+                label: const Text('Отменить'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Colors.red,
                   side: const BorderSide(color: Colors.red),

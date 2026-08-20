@@ -46,7 +46,7 @@ class AuthService {
         return 'ароль должен быть не менее 6 символов';
       }
 
-      return 'шибка авторизации: ${error.message ?? error.code}';
+      return 'Ошибка авторизации: ${error.message ?? error.code}';
     } on TulparApiException catch (error) {
       if (createdUser != null) {
         try {

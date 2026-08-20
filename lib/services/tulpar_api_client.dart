@@ -305,7 +305,7 @@ class TulparApiClient {
 
       throw TulparApiException(
         response.statusCode,
-        body['error']?.toString() ?? '????? ???????? ???????',
+        body['error']?.toString() ?? 'Ошибка загрузки заказов',
         data: body,
       );
     }
@@ -315,7 +315,7 @@ class TulparApiClient {
     if (decoded is! List) {
       throw const TulparApiException(
         500,
-        '?????? ?????? ???????????? ?????? ???????.',
+        'Сервер вернул некорректный список заказов.',
       );
     }
 
@@ -379,7 +379,7 @@ class TulparApiClient {
 
       throw TulparApiException(
         response.statusCode,
-        map['error']?.toString() ?? '????? ???????',
+        map['error']?.toString() ?? 'Ошибка запроса',
         data: map,
       );
     }
@@ -412,7 +412,7 @@ class TulparApiClient {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw TulparApiException(
         response.statusCode,
-        decoded['error']?.toString() ?? '?????? ???????',
+        decoded['error']?.toString() ?? 'Ошибка запроса',
         data: decoded,
       );
     }
@@ -445,7 +445,7 @@ class TulparApiClient {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw TulparApiException(
         response.statusCode,
-        decoded['error']?.toString() ?? '????? ???????',
+        decoded['error']?.toString() ?? 'Ошибка запроса',
         data: decoded,
       );
     }

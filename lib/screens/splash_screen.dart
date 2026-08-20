@@ -29,7 +29,7 @@ class SplashScreen extends StatefulWidget {
   final SplashDestination Function()? timeoutFallback;
   final ValueChanged<SplashDestination>? onNavigate;
 
-  @Deprecated('?????-???????? ???????.')
+  @Deprecated('Тестовый вспомогательный метод.')
   final bool initializeVideo;
 
   final Duration maximumDuration;
@@ -159,7 +159,7 @@ class _SplashScreenState extends State<SplashScreen> {
                   )
                 else ...[
                   const Text(
-                    '?? ??????? ????????? ??????????',
+                    'Не удалось запустить приложение',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white,
@@ -188,7 +188,7 @@ class _SplashScreenState extends State<SplashScreen> {
                       backgroundColor: Colors.amber,
                       foregroundColor: Colors.black,
                     ),
-                    child: const Text('?????????'),
+                    child: const Text('Повторить'),
                   ),
                 ],
               ],
