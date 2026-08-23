@@ -15,6 +15,7 @@ import '/services/startup_diagnostics.dart';
 import '/widgets/app_drawer.dart';
 import '/widgets/city_selection_modal.dart';
 import '/widgets/order_creation_error_snackbar.dart';
+import 'destination_picker_screen.dart';
 import 'order_tracking_screen.dart';
 
 class MapScreen extends StatefulWidget {
@@ -50,6 +51,7 @@ class _MapScreenState extends State<MapScreen> {
   List<AddressSuggestion> _toSuggestions = [];
   Timer? _debounceFrom;
   Timer? _debounceTo;
+  int _reverseGeocodeRequestId = 0;
 
   bool _isSelectingFrom = true;
   bool _isLoadingRoute = false;
@@ -66,7 +68,12 @@ class _MapScreenState extends State<MapScreen> {
     _applyCurrentMinimumPrice();
     _fromFocusNode.addListener(_selectFromPoint);
     _toFocusNode.addListener(_selectToPoint);
-    _loadSavedCity();
+    unawaited(_initializeMap());
+  }
+
+  Future<void> _initializeMap() async {
+    await _loadSavedCity();
+    await _determinePosition();
   }
 
   int? _readEnteredPrice() =>
@@ -146,7 +153,63 @@ class _MapScreenState extends State<MapScreen> {
         _mapZoom = 15.0;
       });
       _mapController.move(userPos, 15.0);
+      await _selectPickupAt(userPos);
     }
+  }
+
+  Future<void> _selectPickupAt(LatLng point) async {
+    final requestId = ++_reverseGeocodeRequestId;
+
+    setState(() {
+      _mapCenter = point;
+      _fromPoint = point;
+      _fromAddressController.text = 'Определение адреса...';
+      _fromSuggestions.clear();
+      _routePoints.clear();
+      _isSelectingFrom = true;
+    });
+
+    final address = await GeocodingService.reverseGeocode(
+      point.latitude,
+      point.longitude,
+    );
+
+    if (!mounted || requestId != _reverseGeocodeRequestId) return;
+
+    setState(() => _fromAddressController.text = address);
+
+    if (_toPoint != null) await _buildRoute();
+  }
+
+  void _handleMapEvent(MapEvent event) {
+    if (event is! MapEventMoveEnd) return;
+    if (event.source == MapEventSource.mapController ||
+        event.source == MapEventSource.fitCamera ||
+        event.source == MapEventSource.nonRotatedSizeChange) {
+      return;
+    }
+
+    unawaited(_selectPickupAt(event.camera.center));
+  }
+
+  Future<void> _openDestinationPicker() async {
+    _toFocusNode.unfocus();
+    final selection = await Navigator.of(context).push<DestinationSelection>(
+      MaterialPageRoute(
+        builder: (context) => DestinationPickerScreen(
+          initialCenter: _toPoint ?? _mapCenter,
+          initialAddress: _toPoint == null ? null : _toAddressController.text,
+        ),
+      ),
+    );
+    if (!mounted || selection == null) return;
+
+    setState(() {
+      _toPoint = selection.point;
+      _toAddressController.text = selection.address;
+      _toSuggestions.clear();
+    });
+    if (_fromPoint != null) await _buildRoute();
   }
 
   void _selectFromPoint() {
@@ -184,49 +247,6 @@ class _MapScreenState extends State<MapScreen> {
       _toSuggestions.clear();
     });
     _mapController.move(newCity.center, newCity.mapZoom);
-  }
-
-  void _onMapTap(TapPosition tapPos, LatLng point) async {
-    if (_isSelectingFrom) {
-      setState(() {
-        _fromPoint = point;
-        _fromAddressController.text = 'Определение адреса...';
-        _fromSuggestions.clear();
-        _isSelectingFrom = false;
-      });
-
-      final address = await GeocodingService.reverseGeocode(
-        point.latitude,
-        point.longitude,
-      );
-
-      if (mounted) {
-        setState(() {
-          _fromAddressController.text = address;
-        });
-      }
-    } else {
-      setState(() {
-        _toPoint = point;
-        _toAddressController.text = 'Определение адреса...';
-        _toSuggestions.clear();
-      });
-
-      final address = await GeocodingService.reverseGeocode(
-        point.latitude,
-        point.longitude,
-      );
-
-      if (mounted) {
-        setState(() {
-          _toAddressController.text = address;
-        });
-      }
-    }
-
-    if (_fromPoint != null && _toPoint != null) {
-      _buildRoute();
-    }
   }
 
   Future<void> _buildRoute() async {
@@ -402,7 +422,7 @@ class _MapScreenState extends State<MapScreen> {
             options: MapOptions(
               initialCenter: _mapCenter,
               initialZoom: _mapZoom,
-              onTap: _onMapTap,
+              onMapEvent: _handleMapEvent,
             ),
             children: [
               TileLayer(
@@ -421,17 +441,6 @@ class _MapScreenState extends State<MapScreen> {
                 ),
               MarkerLayer(
                 markers: [
-                  if (_fromPoint != null)
-                    Marker(
-                      point: _fromPoint!,
-                      width: 40,
-                      height: 40,
-                      child: const Icon(
-                        Icons.location_on,
-                        color: Colors.green,
-                        size: 40,
-                      ),
-                    ),
                   if (_toPoint != null)
                     Marker(
                       point: _toPoint!,
@@ -446,6 +455,20 @@ class _MapScreenState extends State<MapScreen> {
                 ],
               ),
             ],
+          ),
+
+          IgnorePointer(
+            child: Center(
+              child: Transform.translate(
+                offset: const Offset(0, -24),
+                child: const Icon(
+                  Icons.location_pin,
+                  color: Colors.green,
+                  size: 48,
+                  shadows: [Shadow(color: Colors.black38, blurRadius: 6)],
+                ),
+              ),
+            ),
           ),
 
           if (_isLoadingRoute)
@@ -602,8 +625,16 @@ class _MapScreenState extends State<MapScreen> {
                             Icons.location_on,
                             color: Colors.red,
                           ),
-                          suffixIcon: _toAddressController.text.isNotEmpty
-                              ? IconButton(
+                          suffixIcon: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                tooltip: 'Выбрать на карте',
+                                icon: const Icon(Icons.map_outlined),
+                                onPressed: _openDestinationPicker,
+                              ),
+                              if (_toAddressController.text.isNotEmpty)
+                                IconButton(
                                   icon: const Icon(Icons.clear, size: 18),
                                   onPressed: () {
                                     _toAddressController.clear();
@@ -613,8 +644,9 @@ class _MapScreenState extends State<MapScreen> {
                                       _routePoints.clear();
                                     });
                                   },
-                                )
-                              : null,
+                                ),
+                            ],
+                          ),
                           border: const OutlineInputBorder(),
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -699,7 +731,6 @@ class _MapScreenState extends State<MapScreen> {
                                     _toSuggestions.clear();
                                   });
                                   _toFocusNode.unfocus();
-                                  _mapController.move(_toPoint!, 15.0);
                                   if (_fromPoint != null && _toPoint != null) {
                                     _buildRoute();
                                   }
@@ -771,8 +802,7 @@ class _MapScreenState extends State<MapScreen> {
       ),
       floatingActionButton: Padding(
         padding: const EdgeInsets.only(bottom: 295),
-        child: FloatingActionButton(
-          mini: true,
+        child: FloatingActionButton.small(
           backgroundColor: Colors.white,
           onPressed: _determinePosition,
           child: const Icon(Icons.my_location, color: Colors.black),
