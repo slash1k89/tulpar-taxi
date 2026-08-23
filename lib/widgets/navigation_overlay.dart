@@ -1,13 +1,21 @@
-﻿import 'dart:async';
+import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
 import '../models/navigation_step.dart';
 
 class NavigationOverlay extends StatefulWidget {
   final List<NavigationStep> steps;
   final VoidCallback? onOffRoute;
+  final ValueListenable<LatLng?>? positionListenable;
 
-  const NavigationOverlay({super.key, required this.steps, this.onOffRoute});
+  const NavigationOverlay({
+    super.key,
+    required this.steps,
+    this.onOffRoute,
+    this.positionListenable,
+  });
 
   @override
   State<NavigationOverlay> createState() => _NavigationOverlayState();
@@ -23,7 +31,12 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
   @override
   void initState() {
     super.initState();
-    _startLocationTracking();
+    if (widget.positionListenable != null) {
+      widget.positionListenable!.addListener(_handleListenablePosition);
+      _handleListenablePosition();
+    } else {
+      _startLocationTracking();
+    }
   }
 
   @override
@@ -36,12 +49,30 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
         _isRecalculating = false;
       });
     }
+    if (oldWidget.positionListenable != widget.positionListenable) {
+      oldWidget.positionListenable?.removeListener(_handleListenablePosition);
+      _positionSubscription?.cancel();
+      _positionSubscription = null;
+      if (widget.positionListenable != null) {
+        widget.positionListenable!.addListener(_handleListenablePosition);
+        _handleListenablePosition();
+      } else {
+        _startLocationTracking();
+      }
+    }
   }
 
   @override
   void dispose() {
+    widget.positionListenable?.removeListener(_handleListenablePosition);
     _positionSubscription?.cancel();
     super.dispose();
+  }
+
+  void _handleListenablePosition() {
+    final position = widget.positionListenable?.value;
+    if (position == null) return;
+    _handlePosition(position.latitude, position.longitude);
   }
 
   void _startLocationTracking() {
@@ -53,41 +84,44 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
     _positionSubscription =
         Geolocator.getPositionStream(locationSettings: locationSettings).listen(
           (Position position) {
-            if (_currentStepIndex >= widget.steps.length || _isRecalculating) {
-              return;
-            }
-
-            final currentStep = widget.steps[_currentStepIndex];
-
-            double distance = Geolocator.distanceBetween(
-              position.latitude,
-              position.longitude,
-              currentStep.targetLat,
-              currentStep.targetLng,
-            );
-
-            setState(() {
-              _distanceToNextStep = distance;
-            });
-
-            if (distance < _minDistanceToCurrentStep) {
-              _minDistanceToCurrentStep = distance;
-            }
-
-            if (distance < 15 && _currentStepIndex < widget.steps.length - 1) {
-              setState(() {
-                _currentStepIndex++;
-                _minDistanceToCurrentStep = double.infinity;
-              });
-              return;
-            }
-
-            if (_minDistanceToCurrentStep != double.infinity &&
-                (distance - _minDistanceToCurrentStep > 45)) {
-              _triggerRecalculation();
-            }
+            _handlePosition(position.latitude, position.longitude);
           },
         );
+  }
+
+  void _handlePosition(double latitude, double longitude) {
+    if (!mounted ||
+        _currentStepIndex >= widget.steps.length ||
+        _isRecalculating) {
+      return;
+    }
+
+    final currentStep = widget.steps[_currentStepIndex];
+    final distance = Geolocator.distanceBetween(
+      latitude,
+      longitude,
+      currentStep.targetLat,
+      currentStep.targetLng,
+    );
+
+    setState(() => _distanceToNextStep = distance);
+
+    if (distance < _minDistanceToCurrentStep) {
+      _minDistanceToCurrentStep = distance;
+    }
+
+    if (distance < 15 && _currentStepIndex < widget.steps.length - 1) {
+      setState(() {
+        _currentStepIndex++;
+        _minDistanceToCurrentStep = double.infinity;
+      });
+      return;
+    }
+
+    if (_minDistanceToCurrentStep != double.infinity &&
+        distance - _minDistanceToCurrentStep > 45) {
+      _triggerRecalculation();
+    }
   }
 
   void _triggerRecalculation() {
@@ -102,7 +136,20 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
     }
   }
 
-  IconData _getManeuverIcon(String modifier) {
+  IconData _getManeuverIcon(NavigationStep step) {
+    final type = step.type.toLowerCase().trim();
+    final modifier = step.modifier.toLowerCase().trim();
+
+    if (type == 'arrive') return Icons.flag;
+    if (type == 'roundabout' || type == 'rotary') {
+      return modifier.contains('left')
+          ? Icons.roundabout_left
+          : Icons.roundabout_right;
+    }
+    if (type == 'merge') return Icons.merge;
+    if (type == 'fork') return Icons.call_split;
+    if (type == 'uturn' || modifier == 'uturn') return Icons.u_turn_left;
+
     switch (modifier) {
       case 'left':
       case 'sharp left':
@@ -114,11 +161,16 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
         return Icons.turn_right;
       case 'slight right':
         return Icons.turn_slight_right;
-      case 'uturn':
-        return Icons.u_turn_left;
       default:
         return Icons.straight;
     }
+  }
+
+  String _formatDistance(double meters) {
+    if (meters >= 1000) {
+      return 'через ${(meters / 1000).toStringAsFixed(1)} км';
+    }
+    return 'через ${meters.round()} м';
   }
 
   @override
@@ -148,11 +200,9 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
-                  _isRecalculating
-                      ? Icons.sync
-                      : _getManeuverIcon(step.modifier),
+                  _isRecalculating ? Icons.sync : _getManeuverIcon(step),
                   color: Colors.black,
-                  size: 32,
+                  size: 42,
                 ),
               ),
               const SizedBox(width: 16),
@@ -162,27 +212,40 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      _isRecalculating
-                          ? 'Перерасчёт...'
-                          : (_distanceToNextStep > 1000
-                                ? '${(_distanceToNextStep / 1000).toStringAsFixed(1)} Р С”Р С'
-                                : '${_distanceToNextStep.toInt()} Р С'),
+                      _isRecalculating ? 'Перерасчёт...' : step.instruction,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 24,
+                        fontSize: 21,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
+                    const SizedBox(height: 3),
                     Text(
                       _isRecalculating
                           ? 'Вы сбились с маршрута'
-                          : (step.streetName.isNotEmpty
-                                ? step.streetName
-                                : 'Следуйте по маршруту'),
+                          : _formatDistance(_distanceToNextStep),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.grey, fontSize: 14),
+                      style: const TextStyle(
+                        color: Colors.amber,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
+                    if (!_isRecalculating && step.streetName.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        step.streetName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white60,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),

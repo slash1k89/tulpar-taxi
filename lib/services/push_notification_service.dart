@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 
 import '../firebase_options.dart';
 import '../screens/chat/chat_screen.dart';
+import '../screens/map/order_tracking_screen.dart';
 import 'tulpar_api_client.dart';
 
 @pragma('vm:entry-point')
@@ -44,6 +45,12 @@ class PushNotificationService {
       _saveTokenForCurrentUser,
     );
     FirebaseMessaging.onMessage.listen((message) {
+      if (_isDriverArrived(message)) {
+        // OrderTrackingScreen observes the order status itself. Showing an
+        // additional foreground banner would only cover the map.
+        return;
+      }
+
       SystemSound.play(SystemSoundType.alert);
 
       final orderId = message.data['orderId'];
@@ -61,12 +68,12 @@ class PushNotificationService {
       );
     });
     FirebaseMessaging.onMessageOpenedApp.listen(
-      (message) => _openChatFromMessage(navigatorKey, message),
+      (message) => _openFromMessage(navigatorKey, message),
     );
     final initialMessage = await _messaging.getInitialMessage();
     if (initialMessage != null) {
       WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _openChatFromMessage(navigatorKey, initialMessage),
+        (_) => _openFromMessage(navigatorKey, initialMessage),
       );
     }
   }
@@ -91,14 +98,31 @@ class PushNotificationService {
     }
   }
 
-  void _openChatFromMessage(
+  bool _isDriverArrived(RemoteMessage message) {
+    return message.data['type']?.toString() == 'driver_arrived';
+  }
+
+  void _openFromMessage(
     GlobalKey<NavigatorState> navigatorKey,
     RemoteMessage message,
   ) {
     final orderId = message.data['orderId'];
     if (orderId is String && orderId.isNotEmpty) {
+      if (_isDriverArrived(message)) {
+        _openOrderTracking(navigatorKey, orderId);
+        return;
+      }
       _openChat(navigatorKey, orderId);
     }
+  }
+
+  void _openOrderTracking(
+    GlobalKey<NavigatorState> navigatorKey,
+    String orderId,
+  ) {
+    navigatorKey.currentState?.push(
+      MaterialPageRoute(builder: (_) => OrderTrackingScreen(orderId: orderId)),
+    );
   }
 
   void _openChat(GlobalKey<NavigatorState> navigatorKey, String orderId) {

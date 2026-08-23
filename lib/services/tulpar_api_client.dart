@@ -257,6 +257,13 @@ class TulparApiClient {
       'carColor': driver is Map ? driver['carColor'] : null,
       'carNumber': driver is Map ? driver['carNumber'] : null,
 
+      // Keep the live location returned by the VPS available to the
+      // passenger tracking screen. Accept snake_case during the API rollout.
+      'driverLat': data['driverLat'] ?? data['driver_lat'],
+      'driverLng': data['driverLng'] ?? data['driver_lng'],
+      'driverLocationUpdatedAt':
+          data['driverLocationUpdatedAt'] ?? data['driver_location_updated_at'],
+
       'delivery': data['delivery'],
       'intercity': data['intercity'],
 

@@ -11,6 +11,7 @@ import '../../services/order_offer_service.dart';
 import '../../services/order_price_service.dart';
 import '../../services/order_workflow_service.dart';
 import '../../services/tulpar_api_client.dart';
+import '../../utils/restartable_stream.dart';
 
 class DriverScreen extends StatefulWidget {
   const DriverScreen({super.key});
@@ -41,54 +42,59 @@ class _DriverScreenState extends State<DriverScreen> {
 
   Stream<Map<String, dynamic>?> _createActiveOrdersStream() {
     return _withInitialTimeout(
-      TulparApiClient().watchActiveDriverOrder(),
+      () => TulparApiClient().watchActiveDriverOrder(),
       'Timed out while loading active driver order.',
     );
   }
 
   Stream<List<Map<String, dynamic>>> _createAvailableOrdersStream() {
     return _withInitialTimeout(
-      TulparApiClient().watchAvailableOrders(),
+      () => TulparApiClient().watchAvailableOrders(),
       'Timed out while loading available driver orders.',
     );
   }
 
-  Stream<T> _withInitialTimeout<T>(Stream<T> source, String message) {
-    late StreamController<T> controller;
-    StreamSubscription<T>? subscription;
-    Timer? initialTimer;
+  Stream<T> _withInitialTimeout<T>(
+    Stream<T> Function() createSource,
+    String message,
+  ) {
+    return restartableStream(() {
+      late StreamController<T> controller;
+      StreamSubscription<T>? subscription;
+      Timer? initialTimer;
 
-    controller = StreamController<T>(
-      onListen: () {
-        initialTimer = Timer(const Duration(seconds: 12), () async {
-          if (controller.isClosed) return;
-          controller.addError(TimeoutException(message));
-          await subscription?.cancel();
-          if (!controller.isClosed) await controller.close();
-        });
-        subscription = source.listen(
-          (event) {
-            initialTimer?.cancel();
-            if (!controller.isClosed) controller.add(event);
-          },
-          onError: (Object error, StackTrace stackTrace) {
-            initialTimer?.cancel();
-            if (!controller.isClosed) {
-              controller.addError(error, stackTrace);
-            }
-          },
-          onDone: () async {
-            initialTimer?.cancel();
+      controller = StreamController<T>(
+        onListen: () {
+          initialTimer = Timer(const Duration(seconds: 12), () async {
+            if (controller.isClosed) return;
+            controller.addError(TimeoutException(message));
+            await subscription?.cancel();
             if (!controller.isClosed) await controller.close();
-          },
-        );
-      },
-      onCancel: () async {
-        initialTimer?.cancel();
-        await subscription?.cancel();
-      },
-    );
-    return controller.stream;
+          });
+          subscription = createSource().listen(
+            (event) {
+              initialTimer?.cancel();
+              if (!controller.isClosed) controller.add(event);
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              initialTimer?.cancel();
+              if (!controller.isClosed) {
+                controller.addError(error, stackTrace);
+              }
+            },
+            onDone: () async {
+              initialTimer?.cancel();
+              if (!controller.isClosed) await controller.close();
+            },
+          );
+        },
+        onCancel: () async {
+          initialTimer?.cancel();
+          await subscription?.cancel();
+        },
+      );
+      return controller.stream;
+    });
   }
 
   void _retryActiveOrders() {
@@ -266,7 +272,7 @@ class _DriverScreenState extends State<DriverScreen> {
   Stream<DriverOffer?> _ownOfferStream(String orderId) {
     return _ownOfferStreams.putIfAbsent(
       orderId,
-      () => _offerService.watchOwnOffer(orderId),
+      () => restartableStream(() => _offerService.watchOwnOffer(orderId)),
     );
   }
 

@@ -6,10 +6,12 @@ import 'package:latlong2/latlong.dart';
 import '../../screens/chat/chat_screen.dart';
 import '../../widgets/rating_dialog.dart';
 import '../../widgets/driver_location_marker_layer.dart';
+import '../../widgets/navigation_overlay.dart';
 import '../../widgets/app_drawer.dart';
 import '../../services/route_service.dart'; // Переиспользуем сервис
 import '../../services/order_workflow_service.dart';
 import '../../services/driver_tracking_service.dart';
+import '../../models/navigation_step.dart';
 
 class DriverMapScreen extends StatefulWidget {
   final String orderId;
@@ -28,10 +30,14 @@ class DriverMapScreen extends StatefulWidget {
 class _DriverMapScreenState extends State<DriverMapScreen> {
   final MapController _mapController = MapController();
   List<LatLng> _routePoints = [];
+  List<NavigationStep> _navigationSteps = [];
   final DriverTrackingService _tracking = DriverTrackingService();
   String? _trackingMessage;
-  bool _hasCenteredMap = false;
-  bool _hasRequestedRoute = false;
+  bool _followDriver = true;
+  bool _isMapReady = false;
+  int _routeRequestId = 0;
+
+  static const double _navigationZoom = 16.5;
 
   @override
   void initState() {
@@ -54,46 +60,87 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant DriverMapScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldStatus = oldWidget.orderData['status']?.toString();
+    final nextStatus = widget.orderData['status']?.toString();
+    if (oldStatus != nextStatus) {
+      final position = _tracking.latestPosition;
+      if (position != null) unawaited(_buildRouteFrom(position));
+    }
+  }
+
   void _handleDriverPosition() {
     final driverPosition = _tracking.latestPosition;
     if (driverPosition == null) return;
 
-    if (!_hasCenteredMap) {
-      _hasCenteredMap = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _mapController.move(driverPosition, 14.0);
-      });
-    }
-
-    if (!_hasRequestedRoute) {
-      _hasRequestedRoute = true;
-      _buildRouteFrom(driverPosition);
-    }
+    if (_followDriver) _moveMapToDriver(driverPosition);
+    if (_routePoints.isEmpty) unawaited(_buildRouteFrom(driverPosition));
   }
 
-  Future<void> _buildRouteFrom(LatLng driverPosition) async {
+  LatLng _routeDestination([String? statusOverride]) {
+    final status =
+        statusOverride ?? widget.orderData['status']?.toString() ?? 'accepted';
+    final useDestination = status == 'in_progress';
+    return LatLng(
+      (widget.orderData[useDestination ? 'toLat' : 'fromLat'] as num)
+          .toDouble(),
+      (widget.orderData[useDestination ? 'toLng' : 'fromLng'] as num)
+          .toDouble(),
+    );
+  }
+
+  Future<void> _buildRouteFrom(
+    LatLng driverPosition, {
+    String? statusOverride,
+  }) async {
+    final requestId = ++_routeRequestId;
     try {
-      LatLng passengerFrom = LatLng(
-        widget.orderData['fromLat'],
-        widget.orderData['fromLng'],
-      );
+      final destination = _routeDestination(statusOverride);
+      final results = await Future.wait<dynamic>([
+        RouteService.fetchRouteGeometry(
+          startLat: driverPosition.latitude,
+          startLng: driverPosition.longitude,
+          destLat: destination.latitude,
+          destLng: destination.longitude,
+        ),
+        RouteService.fetchSteps(
+          startLat: driverPosition.latitude,
+          startLng: driverPosition.longitude,
+          destLat: destination.latitude,
+          destLng: destination.longitude,
+        ),
+      ]);
 
-      // Исправлено: получение геометрии через единый RouteService
-      final points = await RouteService.fetchRouteGeometry(
-        startLat: driverPosition.latitude,
-        startLng: driverPosition.longitude,
-        destLat: passengerFrom.latitude,
-        destLng: passengerFrom.longitude,
-      );
-
-      if (mounted) {
+      if (mounted && requestId == _routeRequestId) {
         setState(() {
-          _routePoints = points;
+          _routePoints = results[0] as List<LatLng>;
+          _navigationSteps = results[1] as List<NavigationStep>;
         });
       }
     } catch (e) {
       debugPrint('Ошибка получения маршрута: $e');
     }
+  }
+
+  void _moveMapToDriver(LatLng position) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_isMapReady) return;
+      final verticalOffset = MediaQuery.sizeOf(context).height / 7;
+      _mapController.move(
+        position,
+        _navigationZoom,
+        offset: Offset(0, -verticalOffset),
+      );
+    });
+  }
+
+  void _resumeFollowing() {
+    final position = _tracking.latestPosition;
+    if (position == null) return;
+    setState(() => _followDriver = true);
+    _moveMapToDriver(position);
   }
 
   Future<void> _advanceOrder(String currentStatus) async {
@@ -120,6 +167,11 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
     }
     if (nextStatus == 'completed') {
       await _tracking.stopLocationUpdates(widget.orderId);
+    } else if (nextStatus == 'in_progress') {
+      final position = _tracking.latestPosition;
+      if (position != null) {
+        unawaited(_buildRouteFrom(position, statusOverride: nextStatus));
+      }
     }
 
     if (mounted && nextStatus == 'completed') {
@@ -140,6 +192,7 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
     final status = widget.orderData['status']?.toString() ?? 'accepted';
     final actionLabel = {
       'accepted': 'Я на месте',
+      'driver_arrived': 'Начать поездку',
       'arrived': 'Начать поездку',
       'in_progress': 'Завершить поездку',
     }[status];
@@ -164,7 +217,19 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
             mapController: _mapController,
             options: MapOptions(
               initialCenter: passengerFrom,
-              initialZoom: 14.0,
+              initialZoom: _navigationZoom,
+              onMapReady: () {
+                _isMapReady = true;
+                final position = _tracking.latestPosition;
+                if (position != null && _followDriver) {
+                  _moveMapToDriver(position);
+                }
+              },
+              onPositionChanged: (_, hasGesture) {
+                if (hasGesture && _followDriver && mounted) {
+                  setState(() => _followDriver = false);
+                }
+              },
             ),
             children: [
               TileLayer(
@@ -176,8 +241,10 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
                   polylines: [
                     Polyline(
                       points: _routePoints,
-                      color: Colors.green,
-                      strokeWidth: 5,
+                      color: const Color(0xFF1976D2),
+                      strokeWidth: 7,
+                      borderColor: Colors.white,
+                      borderStrokeWidth: 2,
                     ),
                   ],
                 ),
@@ -199,13 +266,45 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
               ),
               DriverLocationMarkerLayer(
                 positionListenable: _tracking.positionListenable,
-                marker: const Icon(
-                  Icons.navigation,
-                  color: Colors.blue,
-                  size: 40,
+                marker: Container(
+                  width: 54,
+                  height: 54,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1565C0),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 3),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Colors.black38,
+                        blurRadius: 8,
+                        offset: Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.local_taxi,
+                    color: Colors.white,
+                    size: 31,
+                  ),
                 ),
               ),
             ],
+          ),
+          if (_navigationSteps.isNotEmpty)
+            NavigationOverlay(
+              steps: _navigationSteps,
+              positionListenable: _tracking.positionListenable,
+            ),
+          Positioned(
+            right: 16,
+            bottom: 190,
+            child: FloatingActionButton.small(
+              heroTag: 'follow-driver',
+              onPressed: _resumeFollowing,
+              backgroundColor: _followDriver ? Colors.blue : Colors.white,
+              foregroundColor: _followDriver ? Colors.white : Colors.blue,
+              child: const Icon(Icons.my_location),
+            ),
           ),
           Positioned(
             bottom: 20,

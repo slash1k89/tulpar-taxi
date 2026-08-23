@@ -166,6 +166,35 @@ void main() {
     expect(loader.calls, 1);
   });
 
+  testWidgets(
+    'driver coordinates from order updates move the passenger marker',
+    (tester) async {
+      final orders = StreamController<Map<String, dynamic>?>.broadcast();
+      final loader = _RouteLoader();
+      addTearDown(orders.close);
+
+      await _pumpTrackingScreen(
+        tester,
+        initialOrderData: _orderData(status: 'accepted', driverId: 'driver-1'),
+        orderStream: orders.stream,
+        routeLoader: loader,
+      );
+
+      expect(find.byIcon(Icons.local_taxi), findsNothing);
+
+      orders.add({
+        ..._orderData(status: 'accepted', driverId: 'driver-1'),
+        'driverLat': 51.958,
+        'driverLng': 66.407,
+      });
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byIcon(Icons.local_taxi), findsOneWidget);
+      expect(loader.calls, 1);
+    },
+  );
+
   testWidgets('route service failure uses a direct endpoint line', (
     tester,
   ) async {

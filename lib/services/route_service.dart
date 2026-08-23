@@ -5,7 +5,7 @@ import '../models/navigation_step.dart';
 
 class RouteService {
   // Метод для водителя: получает пошаговые инструкции для навигации
-  static Future fetchSteps({
+  static Future<List<NavigationStep>> fetchSteps({
     required double startLat,
     required double startLng,
     required double destLat,
