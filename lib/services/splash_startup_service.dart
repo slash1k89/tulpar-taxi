@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'active_order_service.dart';
 import 'startup_diagnostics.dart';
 import 'user_profile_recovery_service.dart';
+import 'tulpar_auth_session.dart';
 
 enum SplashTarget { login, profileRecovery, map, passengerOrder, driverOrder }
 
@@ -47,6 +48,14 @@ class SplashStartupService {
     StartupDiagnostics.mark('auth resolved');
     if (!isSignedIn) return const SplashDestination.login();
 
+    if (TulparAuthController.instance.hasSession) {
+      final activeOrder = await _activeOrderLoader();
+      if (activeOrder == null) return const SplashDestination.map();
+      return activeOrder.isDriver
+          ? SplashDestination.driverOrder(activeOrder)
+          : SplashDestination.passengerOrder(activeOrder);
+    }
+
     // Keep the profile gate first: an incomplete legacy profile must not
     // continue into order routing. The branded splash remains visible while
     // this read is in progress, so the user never sees a blank loading screen.
@@ -65,12 +74,14 @@ class SplashStartupService {
   }
 
   SplashDestination fallbackDestination() {
-    return FirebaseAuth.instance.currentUser == null
+    return !TulparAuthController.instance.hasSession &&
+            FirebaseAuth.instance.currentUser == null
         ? const SplashDestination.login()
         : const SplashDestination.profileRecovery();
   }
 
   static Future<bool> _loadAuth() async {
+    if (await TulparAuthController.instance.restore()) return true;
     return FirebaseAuth.instance.currentUser != null;
   }
 }

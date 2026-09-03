@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../../models/order_service_type.dart';
 import '../chat/chat_screen.dart';
 import 'driver_map_screen.dart';
 import '../../widgets/app_drawer.dart';
@@ -11,104 +13,172 @@ import '../../services/order_offer_service.dart';
 import '../../services/order_price_service.dart';
 import '../../services/order_workflow_service.dart';
 import '../../services/tulpar_api_client.dart';
+import '../../services/new_order_arrival_tracker.dart';
+import '../../services/navigation_audio_service.dart';
+import '../../services/navigation_voice_service.dart';
 import '../../utils/restartable_stream.dart';
+import '../../widgets/delivery_details_view.dart';
+import '../../widgets/intercity_details_view.dart';
+import '../../services/app_identity_service.dart';
+import '../../services/driver_orders_poll_controller.dart';
 
 class DriverScreen extends StatefulWidget {
-  const DriverScreen({super.key});
+  const DriverScreen({
+    super.key,
+    this.serviceType = OrderServiceType.city,
+    this.userId,
+    this.activeOrdersStream,
+    this.availableOrdersStream,
+    this.activeOrderBuilder,
+    this.orderOfferService,
+    this.availableOrdersLoader,
+    this.activeOrderLoader,
+  });
+
+  final OrderServiceType serviceType;
+  final String? userId;
+  final Stream<Map<String, dynamic>?>? activeOrdersStream;
+  final Stream<List<Map<String, dynamic>>>? availableOrdersStream;
+  final Widget Function(Map<String, dynamic> order)? activeOrderBuilder;
+  final OrderOfferService? orderOfferService;
+  final Future<List<Map<String, dynamic>>> Function()? availableOrdersLoader;
+  final Future<Map<String, dynamic>?> Function()? activeOrderLoader;
 
   @override
   State<DriverScreen> createState() => _DriverScreenState();
 }
 
-class _DriverScreenState extends State<DriverScreen> {
-  final String _currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
-  final OrderOfferService _offerService = OrderOfferService();
+class _DriverScreenState extends State<DriverScreen>
+    with WidgetsBindingObserver {
+  late final String _currentUserId;
+  OrderOfferService? _offerServiceInstance;
   final Map<String, Stream<DriverOffer?>> _ownOfferStreams = {};
   bool _isOnline = false;
   bool _isUpdatingAvailability = false;
-  late Stream<Map<String, dynamic>?> _activeOrders;
-  late Stream<List<Map<String, dynamic>>> _availableOrders;
+  late DriverOrdersPollController<Map<String, dynamic>?> _activeOrders;
+  late DriverOrdersPollController<List<Map<String, dynamic>>> _availableOrders;
+  TulparApiClient? _ordersApi;
+  bool _routeIsCurrent = true;
+  TulparApiClient get _api => _ordersApi ??= TulparApiClient();
+  final NewOrderArrivalTracker _newOrderTracker = NewOrderArrivalTracker();
+  bool _appIsActive = true;
+  bool _newOrderSoundScheduled = false;
+  late final NavigationAudioOutput _newOrderVoice = NavigationAudioService(
+    fallbackSpeaker: SystemNavigationVoiceSpeaker(),
+  );
+
+  OrderOfferService get _offerService =>
+      _offerServiceInstance ??= widget.orderOfferService ?? OrderOfferService();
 
   @override
   void initState() {
     super.initState();
+    _currentUserId = widget.userId ?? AppIdentityService().currentUserId ?? '';
+    WidgetsBinding.instance.addObserver(this);
+    _appIsActive =
+        WidgetsBinding.instance.lifecycleState == null ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    _newOrderTracker.setActive(_appIsActive);
     _initializeOrderStreams();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appIsActive = state == AppLifecycleState.resumed;
+    _newOrderTracker.setActive(_appIsActive);
+    _syncPollingLifecycle();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _routeIsCurrent = ModalRoute.isCurrentOf(context) ?? true;
+    _syncPollingLifecycle();
+  }
+
+  void _syncPollingLifecycle() {
+    if (_routeIsCurrent && _appIsActive && _currentUserId.isNotEmpty) {
+      _activeOrders.start();
+      final status = _activeOrders.value?['status'];
+      if (const {
+        'accepted',
+        'driver_arrived',
+        'arrived',
+        'in_progress',
+      }.contains(status)) {
+        _availableOrders.stop();
+      } else {
+        _availableOrders.start();
+      }
+    } else {
+      _activeOrders.stop();
+      _availableOrders.stop();
+      _ordersApi?.close();
+      _ordersApi = null;
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant DriverScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.serviceType != widget.serviceType) {
+      _ownOfferStreams.clear();
+      _newOrderTracker.reset();
+      _availableOrders.dispose();
+      _activeOrders.stop();
+      _ordersApi?.close();
+      _ordersApi = null;
+      _availableOrders = _createAvailableOrdersPoll();
+      _syncPollingLifecycle();
+    }
+  }
+
   void _initializeOrderStreams() {
-    _activeOrders = _createActiveOrdersStream();
-    _availableOrders = _createAvailableOrdersStream();
-  }
-
-  Stream<Map<String, dynamic>?> _createActiveOrdersStream() {
-    return _withInitialTimeout(
-      () => TulparApiClient().watchActiveDriverOrder(),
-      'Timed out while loading active driver order.',
+    _activeOrders = DriverOrdersPollController(
+      label: 'active/driver',
+      load: () =>
+          widget.activeOrderLoader?.call() ?? _api.getActiveDriverOrder(),
+      source: widget.activeOrdersStream,
     );
+    _availableOrders = _createAvailableOrdersPoll();
+    _activeOrders.addListener(_syncPollingLifecycle);
   }
 
-  Stream<List<Map<String, dynamic>>> _createAvailableOrdersStream() {
-    return _withInitialTimeout(
-      () => TulparApiClient().watchAvailableOrders(),
-      'Timed out while loading available driver orders.',
+  DriverOrdersPollController<List<Map<String, dynamic>>>
+  _createAvailableOrdersPoll() {
+    final serviceType = widget.serviceType;
+    return DriverOrdersPollController(
+      label: 'available/${serviceType.apiValue}',
+      load: () async => filterAvailableOrdersForService(
+        await (widget.availableOrdersLoader?.call() ??
+            _api.getAvailableOrders(
+              serviceType: serviceType.isIntercity
+                  ? serviceType.apiValue
+                  : null,
+            )),
+        serviceType,
+      ),
+      source: widget.availableOrdersStream?.map(
+        (orders) => filterAvailableOrdersForService(orders, serviceType),
+      ),
     );
-  }
-
-  Stream<T> _withInitialTimeout<T>(
-    Stream<T> Function() createSource,
-    String message,
-  ) {
-    return restartableStream(() {
-      late StreamController<T> controller;
-      StreamSubscription<T>? subscription;
-      Timer? initialTimer;
-
-      controller = StreamController<T>(
-        onListen: () {
-          initialTimer = Timer(const Duration(seconds: 12), () async {
-            if (controller.isClosed) return;
-            controller.addError(TimeoutException(message));
-            await subscription?.cancel();
-            if (!controller.isClosed) await controller.close();
-          });
-          subscription = createSource().listen(
-            (event) {
-              initialTimer?.cancel();
-              if (!controller.isClosed) controller.add(event);
-            },
-            onError: (Object error, StackTrace stackTrace) {
-              initialTimer?.cancel();
-              if (!controller.isClosed) {
-                controller.addError(error, stackTrace);
-              }
-            },
-            onDone: () async {
-              initialTimer?.cancel();
-              if (!controller.isClosed) await controller.close();
-            },
-          );
-        },
-        onCancel: () async {
-          initialTimer?.cancel();
-          await subscription?.cancel();
-        },
-      );
-      return controller.stream;
-    });
   }
 
   void _retryActiveOrders() {
-    setState(() => _activeOrders = _createActiveOrdersStream());
+    unawaited(_activeOrders.refresh());
   }
 
   void _retryAvailableOrders() {
-    setState(() => _availableOrders = _createAvailableOrdersStream());
+    unawaited(_availableOrders.refresh());
   }
 
   Future<void> _setOnline(bool value) async {
     setState(() => _isUpdatingAvailability = true);
     try {
-      await OrderWorkflowService().setDriverOnline(value);
+      if (value) {
+        await _availableOrders.refresh();
+        if (_availableOrders.error != null) throw _availableOrders.error!;
+      }
       if (mounted) setState(() => _isOnline = value);
     } catch (error) {
       if (mounted) {
@@ -123,20 +193,67 @@ class _DriverScreenState extends State<DriverScreen> {
 
   @override
   void dispose() {
+    _activeOrders.dispose();
+    _availableOrders.dispose();
+    _ordersApi?.close();
+    WidgetsBinding.instance.removeObserver(this);
+    _newOrderTracker.dispose();
+    unawaited(_newOrderVoice.dispose());
     if (_isOnline) {
       OrderWorkflowService().setDriverOnline(false);
     }
     super.dispose();
   }
 
-  Future<void> _acceptOrder(String orderId) async {
+  void _handleAvailableOrders(List<Map<String, dynamic>> orders) {
+    final ids = orders.map((order) => order['id']?.toString() ?? '').toList();
+    final shouldPlay = _newOrderTracker.process(ids);
+    if (kDebugMode) {
+      debugPrint(
+        '[DriverOrders] ids=${ids.join(',')} '
+        'voice=${shouldPlay ? 'triggered' : 'skipped'}',
+      );
+    }
+    if (!shouldPlay || _newOrderSoundScheduled) return;
+    final newTypes = orders
+        .where(
+          (o) => _newOrderTracker.lastNewOrderIds.contains(o['id']?.toString()),
+        )
+        .map((o) => OrderServiceType.fromValue(o['serviceType']))
+        .toSet();
+    final message = newTypes
+        .map((type) => type.newDriverOrderMessage)
+        .join('\n');
+    _newOrderSoundScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _newOrderSoundScheduled = false;
+      if (!mounted || !_appIsActive) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+      unawaited(_newOrderVoice.play(newOrderVoiceCue));
+    });
+  }
+
+  Future<void> _acceptOrder(
+    String orderId,
+    OrderServiceType serviceType,
+  ) async {
     final messenger = ScaffoldMessenger.of(context);
 
     try {
       await OrderWorkflowService().acceptOrder(orderId);
 
       messenger.showSnackBar(
-        const SnackBar(content: Text('Заказ принят! Направляйтесь к клиенту.')),
+        SnackBar(
+          content: Text(switch (serviceType) {
+            OrderServiceType.delivery =>
+              'Доставка принята! Направляйтесь за посылкой.',
+            OrderServiceType.intercity =>
+              'Междугородняя поездка принята! Направляйтесь к пассажиру.',
+            OrderServiceType.city => 'Заказ принят! Направляйтесь к клиенту.',
+          }),
+        ),
       );
     } catch (e) {
       messenger.showSnackBar(
@@ -285,28 +402,11 @@ class _DriverScreenState extends State<DriverScreen> {
     }
 
     // 1. Автоматический вывод активного заказа для водителя
-    return StreamBuilder<Map<String, dynamic>?>(
-      stream: _activeOrders,
-      builder: (context, activeSnapshot) {
-        if (activeSnapshot.hasError) {
-          debugPrint(
-            '[DriverOrders] active-order stream failed: '
-            '${activeSnapshot.error}',
-          );
-          return _buildAvailableOrdersScaffold(
-            activeStreamError: activeSnapshot.error,
-          );
-        }
-
-        if (activeSnapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            backgroundColor: Color(0xFF121212),
-            body: Center(child: CircularProgressIndicator(color: Colors.amber)),
-          );
-        }
-
+    return AnimatedBuilder(
+      animation: Listenable.merge([_activeOrders, _availableOrders]),
+      builder: (context, _) {
         // Если есть активный заказ — переключаем на карту водителя со всеми данными заказа
-        final activeOrder = activeSnapshot.data;
+        final activeOrder = _activeOrders.value;
 
         if (activeOrder != null) {
           final status = activeOrder['status']?.toString();
@@ -318,13 +418,18 @@ class _DriverScreenState extends State<DriverScreen> {
             final orderId = activeOrder['id']?.toString() ?? '';
 
             if (orderId.isNotEmpty) {
+              if (widget.activeOrderBuilder != null) {
+                return widget.activeOrderBuilder!(activeOrder);
+              }
               return DriverMapScreen(orderId: orderId, orderData: activeOrder);
             }
           }
         }
 
         // 2. Если активного заказа нет — показываем список поиска.
-        return _buildAvailableOrdersScaffold();
+        return _buildAvailableOrdersScaffold(
+          activeStreamError: _activeOrders.error,
+        );
       },
     );
   }
@@ -333,7 +438,11 @@ class _DriverScreenState extends State<DriverScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       appBar: AppBar(
-        title: const Text('Заказы для водителя'),
+        title: Text(
+          widget.serviceType.isIntercity
+              ? widget.serviceType.driverSectionTitle
+              : 'Такси и доставка',
+        ),
         backgroundColor: const Color(0xFF1E1E1E),
         foregroundColor: Colors.amber,
         actions: [
@@ -341,6 +450,7 @@ class _DriverScreenState extends State<DriverScreen> {
             children: [
               const Text('На линии'),
               Switch(
+                key: const Key('driver_online_switch'),
                 value: _isOnline,
                 onChanged: _isUpdatingAvailability ? null : _setOnline,
               ),
@@ -348,12 +458,18 @@ class _DriverScreenState extends State<DriverScreen> {
           ),
         ],
       ),
-      drawer: const AppDrawer(mode: AppMode.driver),
+      drawer: AppDrawer(
+        mode: AppMode.driver,
+        selectedServiceType: widget.serviceType,
+      ),
       body: Column(
         children: [
           if (activeStreamError != null)
             MaterialBanner(
-              content: Text(_messageForLoadError(activeStreamError)),
+              key: const Key('driver_active_order_error'),
+              content: const Text(
+                'Не удалось проверить текущий заказ. Проверка повторяется автоматически.',
+              ),
               actions: [
                 TextButton(
                   onPressed: _retryActiveOrders,
@@ -361,28 +477,33 @@ class _DriverScreenState extends State<DriverScreen> {
                 ),
               ],
             ),
+          if (_availableOrders.error != null)
+            MaterialBanner(
+              key: const Key('driver_available_orders_error'),
+              content: Text(_messageForLoadError(_availableOrders.error)),
+              actions: [
+                TextButton(
+                  onPressed: _retryAvailableOrders,
+                  child: const Text('Повторить'),
+                ),
+              ],
+            ),
           Expanded(
-            child: StreamBuilder<List<Map<String, dynamic>>>(
-              stream: _availableOrders,
-              builder: (context, snapshot) {
-                if (snapshot.hasError) {
-                  debugPrint(
-                    '[DriverOrders] available-orders stream failed: '
-                    '${snapshot.error}',
-                  );
-                  return _buildLoadError(
-                    snapshot.error,
-                    onRetry: _retryAvailableOrders,
-                  );
-                }
-
-                if (snapshot.connectionState == ConnectionState.waiting) {
+            child: Builder(
+              builder: (context) {
+                if (!_availableOrders.hasData &&
+                    _availableOrders.error == null) {
                   return const Center(
                     child: CircularProgressIndicator(color: Colors.amber),
                   );
                 }
 
-                if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                if (_availableOrders.hasData) {
+                  _handleAvailableOrders(_availableOrders.value!);
+                }
+
+                if (!_availableOrders.hasData ||
+                    _availableOrders.value!.isEmpty) {
                   return const Center(
                     child: Text(
                       'Пока нет доступных заказов',
@@ -391,7 +512,7 @@ class _DriverScreenState extends State<DriverScreen> {
                   );
                 }
 
-                final orders = snapshot.data!;
+                final orders = _availableOrders.value!;
 
                 return ListView.builder(
                   padding: const EdgeInsets.all(12),
@@ -425,6 +546,24 @@ class _DriverScreenState extends State<DriverScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            Chip(
+                              label: Text(
+                                OrderServiceType.fromValue(
+                                  data['serviceType'],
+                                ).driverOrderLabel,
+                              ),
+                              avatar: Icon(
+                                OrderServiceType.fromValue(
+                                  data['serviceType'],
+                                ).icon,
+                                size: 18,
+                              ),
+                              backgroundColor: Colors.amber,
+                              labelStyle: const TextStyle(
+                                color: Colors.black,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
@@ -486,6 +625,17 @@ class _DriverScreenState extends State<DriverScreen> {
                                 ),
                               ],
                             ),
+                            if (DeliveryDetailsView.isDelivery(data)) ...[
+                              const SizedBox(height: 12),
+                              DeliveryDetailsView(orderData: data),
+                            ],
+                            if (IntercityDetailsView.isIntercity(data)) ...[
+                              const SizedBox(height: 12),
+                              IntercityDetailsView(
+                                orderData: data,
+                                showRouteAndPrice: false,
+                              ),
+                            ],
                             const Divider(color: Colors.white24, height: 24),
                             Row(
                               children: [
@@ -517,6 +667,9 @@ class _DriverScreenState extends State<DriverScreen> {
                             const SizedBox(height: 12),
                             _buildOrderActions(
                               orderId: orderId,
+                              serviceType: OrderServiceType.fromValue(
+                                data['serviceType'],
+                              ),
                               passengerName:
                                   data['passengerName']?.toString() ??
                                   'Пассажир',
@@ -538,6 +691,7 @@ class _DriverScreenState extends State<DriverScreen> {
 
   Widget _buildOrderActions({
     required String orderId,
+    required OrderServiceType serviceType,
     required String passengerName,
     required int passengerPrice,
   }) {
@@ -597,7 +751,7 @@ class _DriverScreenState extends State<DriverScreen> {
                 ElevatedButton(
                   onPressed: passengerPrice <= 0
                       ? null
-                      : () => _acceptOrder(orderId),
+                      : () => _acceptOrder(orderId, serviceType),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.amber,
                     foregroundColor: Colors.black,
@@ -619,31 +773,21 @@ class _DriverScreenState extends State<DriverScreen> {
       FirebaseException(code: 'failed-precondition') =>
         'Запрос заказов требует настройки Firestore. Проверьте технические логи.',
       TimeoutException() =>
-        'Сервер не ответил за 12 секунд. Проверьте интернет и повторите попытку.',
-      _ =>
-        'Не удалось загрузить заказы. Проверьте интернет и повторите попытку.',
+        'Не удалось обновить доступные заказы: сервер не ответил вовремя. Повторяем автоматически.',
+      _ => 'Не удалось обновить доступные заказы. Повторяем автоматически.',
     };
   }
+}
 
-  Widget _buildLoadError(Object? error, {required VoidCallback onRetry}) {
-    final message = _messageForLoadError(error);
-    final content = Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white70, fontSize: 16),
-            ),
-            const SizedBox(height: 18),
-            ElevatedButton(onPressed: onRetry, child: const Text('Повторить')),
-          ],
-        ),
-      ),
-    );
-    return content;
-  }
+List<Map<String, dynamic>> filterAvailableOrdersForService(
+  Iterable<Map<String, dynamic>> orders,
+  OrderServiceType serviceType,
+) {
+  return orders
+      .where(
+        (order) => serviceType.isIntercity
+            ? OrderServiceType.fromValue(order['serviceType']).isIntercity
+            : !OrderServiceType.fromValue(order['serviceType']).isIntercity,
+      )
+      .toList(growable: false);
 }

@@ -106,6 +106,7 @@ class _FakeRatingService implements RatingService {
     required String orderId,
     required String targetUserId,
     required int score,
+    String? comment,
   }) async {
     calls++;
     this.orderId = orderId;

@@ -7,6 +7,8 @@ import 'package:http/http.dart' as http;
 import '../order_workflow_service.dart';
 import '../../screens/chat/chat_screen.dart';
 import '../../widgets/rating_dialog.dart';
+import '../../widgets/tulpar_map_tile_layer.dart';
+import '../../widgets/tulpar_map_visuals.dart';
 
 class DriverMapScreen extends StatefulWidget {
   final String orderId;
@@ -25,6 +27,7 @@ class DriverMapScreen extends StatefulWidget {
 class _DriverMapScreenState extends State<DriverMapScreen> {
   final MapController _mapController = MapController();
   LatLng? _driverLocation;
+  double? _driverHeading;
   List<LatLng> _routePoints = [];
 
   @override
@@ -41,7 +44,10 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
       widget.orderData['fromLng'],
     );
 
-    setState(() => _driverLocation = driverPos);
+    setState(() {
+      _driverLocation = driverPos;
+      _driverHeading = pos.heading;
+    });
     _mapController.move(driverPos, 14.0);
 
     // Маршрут: Водитель -> Точка забора пассажира
@@ -102,44 +108,39 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
             options: MapOptions(
               initialCenter: passengerFrom,
               initialZoom: 14.0,
+              cameraConstraint: CameraConstraint.contain(
+                bounds: LatLngBounds(
+                  const LatLng(-90, -180),
+                  const LatLng(90, 180),
+                ),
+              ),
             ),
             children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.example.esil_taxi',
-              ),
+              const TulparMapTileLayer(),
               if (_routePoints.isNotEmpty)
                 PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: _routePoints,
-                      color: Colors.green,
-                      strokeWidth: 5,
-                    ),
-                  ],
+                  polylines: [TulparMapVisuals.routePolyline(_routePoints)],
                 ),
               MarkerLayer(
                 markers: [
                   if (_driverLocation != null)
                     Marker(
                       point: _driverLocation!,
-                      child: const Icon(
-                        Icons.navigation,
-                        color: Colors.blue,
-                        size: 40,
+                      width: TulparMapVisuals.vehicleMarkerSize,
+                      height: TulparMapVisuals.vehicleMarkerSize,
+                      child: TulparVehicleMarker(
+                        isDelivery:
+                            widget.orderData['serviceType'] == 'delivery',
+                        headingDegrees: _driverHeading,
                       ),
                     ),
-                  Marker(
+                  TulparMapVisuals.endpointMarker(
                     point: passengerFrom,
-                    child: const Icon(
-                      Icons.person_pin_circle,
-                      color: Colors.green,
-                      size: 45,
-                    ),
+                    endpoint: TulparMapEndpoint.pickup,
                   ),
-                  Marker(
+                  TulparMapVisuals.endpointMarker(
                     point: passengerTo,
-                    child: const Icon(Icons.flag, color: Colors.red, size: 40),
+                    endpoint: TulparMapEndpoint.destination,
                   ),
                 ],
               ),

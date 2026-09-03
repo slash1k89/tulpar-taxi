@@ -4,6 +4,7 @@ import 'package:latlong2/latlong.dart';
 
 import 'minimum_fare_service.dart';
 import 'tulpar_api_client.dart';
+import '../utils/formatters.dart';
 
 enum OrderCreationFailure {
   notAuthenticated,
@@ -42,6 +43,9 @@ class OrderDraft {
     required this.fromPoint,
     required this.toPoint,
     required this.cityId,
+    this.serviceType = 'city',
+    this.delivery,
+    this.intercity,
   });
 
   final String fromAddress;
@@ -50,6 +54,9 @@ class OrderDraft {
   final LatLng fromPoint;
   final LatLng toPoint;
   final String cityId;
+  final String serviceType;
+  final DeliveryOrderDetails? delivery;
+  final IntercityOrderDetails? intercity;
 
   void validate() {
     final from = fromAddress.trim();
@@ -86,6 +93,35 @@ class OrderDraft {
         'Проверьте адреса, цену и точки маршрута.',
       );
     }
+
+    if (serviceType != 'city' &&
+        serviceType != 'delivery' &&
+        serviceType != 'intercity') {
+      throw const OrderCreationException(
+        OrderCreationFailure.invalidData,
+        'Выберите доступный тип услуги.',
+      );
+    }
+
+    if (serviceType == 'delivery') {
+      delivery?.validate();
+      if (delivery == null) {
+        throw const OrderCreationException(
+          OrderCreationFailure.invalidData,
+          'Заполните данные доставки.',
+        );
+      }
+    }
+
+    if (serviceType == 'intercity') {
+      intercity?.validate();
+      if (intercity == null) {
+        throw const OrderCreationException(
+          OrderCreationFailure.invalidData,
+          'Заполните данные междугородней поездки.',
+        );
+      }
+    }
   }
 
   Map<String, Object?> toFirestore({
@@ -109,6 +145,83 @@ class OrderDraft {
   }
 }
 
+class IntercityOrderDetails {
+  const IntercityOrderDetails({
+    required this.scheduledAt,
+    required this.passengerCount,
+    required this.hasLuggage,
+    this.comment = '',
+  });
+
+  final DateTime scheduledAt;
+  final int passengerCount;
+  final bool hasLuggage;
+  final String comment;
+
+  void validate({DateTime? now}) {
+    final currentInstant = (now ?? DateTime.now()).toUtc();
+    if (passengerCount < 1 ||
+        passengerCount > 8 ||
+        comment.trim().length > 500 ||
+        !scheduledAt.toUtc().isAfter(currentInstant)) {
+      throw const OrderCreationException(
+        OrderCreationFailure.invalidData,
+        'Выберите будущее время и проверьте данные поездки.',
+      );
+    }
+  }
+
+  String get departureAtIso => scheduledAt.toUtc().toIso8601String();
+}
+
+const Duration kazakhstanUtcOffset = Duration(hours: 5);
+
+DateTime kazakhstanWallClock([DateTime? now]) =>
+    (now ?? DateTime.now()).toUtc().add(kazakhstanUtcOffset);
+
+DateTime kazakhstanDepartureUtc({
+  required int year,
+  required int month,
+  required int day,
+  required int hour,
+  required int minute,
+}) =>
+    DateTime.utc(year, month, day, hour, minute).subtract(kazakhstanUtcOffset);
+
+String formatHourMinute24(int hour, int minute) =>
+    '${hour.toString().padLeft(2, '0')}:'
+    '${minute.toString().padLeft(2, '0')}';
+
+class DeliveryOrderDetails {
+  const DeliveryOrderDetails({
+    required this.itemDescription,
+    required this.recipientName,
+    required this.recipientPhone,
+    this.destinationApartment = '',
+  });
+
+  final String itemDescription;
+  final String recipientName;
+  final String recipientPhone;
+  final String destinationApartment;
+
+  void validate() {
+    if (itemDescription.trim().isEmpty ||
+        itemDescription.trim().length > 500 ||
+        recipientName.trim().isEmpty ||
+        recipientName.trim().length > 150 ||
+        destinationApartment.trim().length > 30 ||
+        !isCompleteRuPhone(recipientPhone)) {
+      throw const OrderCreationException(
+        OrderCreationFailure.invalidData,
+        'Заполните описание посылки, имя и телефон получателя.',
+      );
+    }
+  }
+
+  String get normalizedRecipientPhone => normalizeRuPhone(recipientPhone);
+}
+
 abstract interface class OrderCreationGateway {
   Future<String> create(OrderDraft draft);
 }
@@ -124,7 +237,8 @@ class VpsOrderCreationGateway implements OrderCreationGateway {
     draft.validate();
 
     try {
-      final result = await _apiClient.createCityOrder(
+      final result = await _apiClient.createOrder(
+        serviceType: draft.serviceType,
         passengerPrice: draft.price,
         pickupAddress: draft.fromAddress.trim(),
         destinationAddress: draft.toAddress.trim(),
@@ -132,6 +246,14 @@ class VpsOrderCreationGateway implements OrderCreationGateway {
         pickupLng: draft.fromPoint.longitude,
         destinationLat: draft.toPoint.latitude,
         destinationLng: draft.toPoint.longitude,
+        itemDescription: draft.delivery?.itemDescription,
+        recipientName: draft.delivery?.recipientName,
+        recipientPhone: draft.delivery?.normalizedRecipientPhone,
+        destinationApartment: draft.delivery?.destinationApartment.trim(),
+        departureAt: draft.intercity?.departureAtIso,
+        passengerCount: draft.intercity?.passengerCount,
+        hasLuggage: draft.intercity?.hasLuggage,
+        comment: draft.intercity?.comment.trim(),
       );
 
       final id = result['id'];
@@ -230,6 +352,9 @@ class OrderCreationService {
     required LatLng fromPoint,
     required LatLng toPoint,
     required String cityId,
+    String serviceType = 'city',
+    DeliveryOrderDetails? delivery,
+    IntercityOrderDetails? intercity,
   }) {
     final current = _inFlight;
 
@@ -244,6 +369,9 @@ class OrderCreationService {
       fromPoint: fromPoint,
       toPoint: toPoint,
       cityId: cityId,
+      serviceType: serviceType,
+      delivery: delivery,
+      intercity: intercity,
     );
 
     final operation = _create(draft);
@@ -259,7 +387,7 @@ class OrderCreationService {
 
       final minimumFare = _minimumFareService.currentMinimumFare;
 
-      if (draft.price < minimumFare) {
+      if (draft.serviceType == 'city' && draft.price < minimumFare) {
         throw OrderCreationException(
           OrderCreationFailure.belowMinimumFare,
           _minimumFareService.messageForMinimum(minimumFare),

@@ -1,7 +1,10 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../app_routes.dart';
+import '../models/order_service_type.dart';
+import '../services/app_identity_service.dart';
+import '../services/user_profile_service.dart';
+import '../utils/formatters.dart';
 
 enum AppMode { passenger, driver }
 
@@ -13,11 +16,15 @@ class AppDrawer extends StatefulWidget {
     required this.mode,
     this.onModeChanged,
     this.userLabel,
+    this.phoneLoader,
+    this.selectedServiceType,
   });
 
   final AppMode mode;
   final AppModeChangeCallback? onModeChanged;
   final String? userLabel;
+  final Future<String?> Function()? phoneLoader;
+  final OrderServiceType? selectedServiceType;
 
   @override
   State<AppDrawer> createState() => _AppDrawerState();
@@ -25,6 +32,31 @@ class AppDrawer extends StatefulWidget {
 
 class _AppDrawerState extends State<AppDrawer> {
   bool _isChangingMode = false;
+  String _userLabel = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _userLabel = widget.userLabel?.trim() ?? '';
+    if (widget.userLabel == null) _loadPhone();
+  }
+
+  Future<void> _loadPhone() async {
+    try {
+      final phone = await (widget.phoneLoader ?? _loadCurrentUserPhone)();
+      if (!mounted) return;
+      setState(() => _userLabel = formatRuPhoneForDisplay(phone ?? ''));
+    } catch (_) {
+      if (mounted) setState(() => _userLabel = '');
+    }
+  }
+
+  Future<String?> _loadCurrentUserPhone() async {
+    final userId = AppIdentityService().currentUserId;
+    if (userId == null || userId.isEmpty) return null;
+    final profile = await FirebaseUserProfileRepository().load(userId);
+    return profile?.phone;
+  }
 
   Future<void> _changeMode(bool driverMode) async {
     if (_isChangingMode || driverMode == (widget.mode == AppMode.driver)) {
@@ -48,8 +80,7 @@ class _AppDrawerState extends State<AppDrawer> {
         return;
       }
 
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) {
+      if (!AppIdentityService().isAuthenticated) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -79,23 +110,26 @@ class _AppDrawerState extends State<AppDrawer> {
     Navigator.pushNamed(context, routeName, arguments: widget.mode);
   }
 
+  void _openServiceSection(String routeName) {
+    final navigator = Navigator.of(context);
+    navigator.pop();
+    navigator.pushReplacementNamed(routeName);
+  }
+
   Future<void> _signOut() async {
     Navigator.pop(context);
-    await FirebaseAuth.instance.signOut();
+    try {
+      await AppIdentityService().signOut();
+    } catch (_) {
+      // TulparAuthController clears the local session even if logout delivery
+      // fails, so the app must still leave authenticated screens.
+    }
     if (!mounted) return;
     Navigator.pushNamedAndRemoveUntil(context, AppRoutes.login, (_) => false);
   }
 
   @override
   Widget build(BuildContext context) {
-    var label = widget.userLabel ?? '';
-    if (widget.userLabel == null) {
-      try {
-        label = FirebaseAuth.instance.currentUser?.email ?? '';
-      } catch (_) {
-        label = '';
-      }
-    }
     final isDriver = widget.mode == AppMode.driver;
 
     return Drawer(
@@ -104,7 +138,7 @@ class _AppDrawerState extends State<AppDrawer> {
         children: [
           UserAccountsDrawerHeader(
             accountName: Text(isDriver ? 'Водитель' : 'Пассажир'),
-            accountEmail: Text(label),
+            accountEmail: Text(_userLabel, key: const Key('drawer_user_label')),
             currentAccountPicture: const CircleAvatar(
               backgroundColor: Colors.amber,
               child: Icon(Icons.person, color: Colors.black, size: 40),
@@ -127,11 +161,32 @@ class _AppDrawerState extends State<AppDrawer> {
             onChanged: _isChangingMode ? null : _changeMode,
           ),
           const Divider(),
-          ListTile(
-            leading: const Icon(Icons.map_outlined),
-            title: const Text('Карта'),
-            onTap: () => _openRoute(AppRoutes.map),
-          ),
+          if (isDriver) ...[
+            _serviceTile(
+              type: OrderServiceType.city,
+              routeName: AppRoutes.driverTaxi,
+              title: 'Такси и доставка',
+            ),
+            _serviceTile(
+              type: OrderServiceType.intercity,
+              routeName: AppRoutes.driverIntercity,
+            ),
+          ] else ...[
+            _serviceTile(
+              type: OrderServiceType.city,
+              routeName: AppRoutes.map,
+              title: 'Заказать такси',
+            ),
+            _serviceTile(
+              type: OrderServiceType.delivery,
+              routeName: AppRoutes.delivery,
+            ),
+            _serviceTile(
+              type: OrderServiceType.intercity,
+              routeName: AppRoutes.intercity,
+            ),
+          ],
+          const Divider(),
           ListTile(
             leading: const Icon(Icons.history),
             title: const Text('История заказов'),
@@ -150,6 +205,22 @@ class _AppDrawerState extends State<AppDrawer> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _serviceTile({
+    required OrderServiceType type,
+    required String routeName,
+    String? title,
+    String? subtitle,
+  }) {
+    return ListTile(
+      key: Key('drawer_service_${type.apiValue}'),
+      leading: Icon(type.icon),
+      title: Text(title ?? type.title),
+      subtitle: subtitle == null ? null : Text(subtitle),
+      selected: widget.selectedServiceType == type,
+      onTap: () => _openServiceSection(routeName),
     );
   }
 }

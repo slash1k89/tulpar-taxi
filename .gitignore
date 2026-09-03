@@ -49,6 +49,10 @@ app.*.map.json
 .env
 .env.*
 !.env.example
+/secrets/
+/postgres/data/
+*firebase-service-account*.json
+*service-account-key*.json
 
 # Firebase Emulator Suite exports
 /firebase-export-*/
@@ -63,9 +67,47 @@ app.*.map.json
 *.bak_*
 *-before-vps
 *.bak-before-vps
+*.dump
+*.backup
 
 # Local audit and repair files
 FIRESTORE_ACCEPTANCE_AUDIT.md
 FIRESTORE_DRIVER_PROFILE_AUDIT.md
 FIRESTORE_OFFERS_AUDIT.md
 repair_encoding.ps1
+
+# Local credentials and signing material (keep reviewed examples)
+*.env
+*.env.*
+!*.env.example
+!*.env.sample
+!*.env.template
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+**/key.properties
+**/.npmrc
+**/.netrc
+**/.pgpass
+*service-account*.json
+*service_account*.json
+*firebase-adminsdk*.json
+credentials.json
+credentials-*.json
+
+# Packaged builds, database dumps, and local scratch backups
+*.apk
+*.aab
+*.ipa
+*.tar
+*.tar.gz
+*.tgz
+*.sql.gz
+*.sql.dump
+/work/
+/tmp/
+/temp/
+# tulpar-schema.sql is a reviewed schema-only integration-test dependency.

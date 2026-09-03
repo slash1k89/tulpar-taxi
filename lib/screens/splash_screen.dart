@@ -7,6 +7,7 @@ import '../services/active_order_service.dart';
 import '../services/splash_startup_service.dart';
 import '../services/startup_diagnostics.dart';
 import '../services/user_profile_recovery_service.dart';
+import '../services/tulpar_auth_session.dart';
 import 'auth/login_screen.dart';
 import 'auth/user_profile_recovery_screen.dart';
 import 'driver/driver_map_screen.dart';
@@ -67,6 +68,12 @@ class _SplashScreenState extends State<SplashScreen> {
         if (!mounted || _hasNavigated) return;
 
         _navigateDestination(destination);
+        return;
+      }
+
+      final hasTulparSession = await TulparAuthController.instance.restore();
+      if (hasTulparSession) {
+        _replace(const _FastStartupGate(), 'fastAppGate');
         return;
       }
 
@@ -227,6 +234,26 @@ class _FastStartupGateState extends State<_FastStartupGate> {
 
   Future<void> _runBackgroundRecovery() async {
     try {
+      if (TulparAuthController.instance.hasSession) {
+        final activeOrder = await ActiveOrderService().findCurrentOrder();
+        if (!mounted || _handled || activeOrder == null) return;
+        _handled = true;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => activeOrder.isDriver
+                ? DriverMapScreen(
+                    orderId: activeOrder.orderId,
+                    orderData: activeOrder.data,
+                  )
+                : OrderTrackingScreen(
+                    orderId: activeOrder.orderId,
+                    initialOrderData: activeOrder.data,
+                  ),
+          ),
+        );
+        return;
+      }
       final recoveryFuture = UserProfileRecoveryService().inspectAndRepair();
 
       final activeOrderFuture = ActiveOrderService().findCurrentOrder();

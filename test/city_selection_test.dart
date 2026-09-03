@@ -22,6 +22,8 @@ void main() {
       expect(city.latitude, inInclusiveRange(-90, 90));
       expect(city.longitude, inInclusiveRange(-180, 180));
       expect(city.mapZoom, inInclusiveRange(10, 16));
+      expect(city.region, isNotEmpty);
+      expect(city.contains(city.center), isTrue);
     }
   });
 
@@ -31,6 +33,7 @@ void main() {
     await CityService.setSelectedCity('arkalyk');
 
     expect(await CityService.getSelectedCity(), 'arkalyk');
+    expect((await CityService.getSelectedCityDetails()).id, 'arkalyk');
   });
 
   testWidgets('city selector returns the chosen city', (tester) async {

@@ -23,14 +23,32 @@
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="taxi_esil">
+  <meta name="apple-mobile-web-app-title" content="TULPAR">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>taxi_esil</title>
+  <title>TULPAR taxi</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- Required by maplibre_web 0.3.5. Keep these synchronous and before
+       flutter_bootstrap.js so the Dart JS interop globals already exist. -->
+  <link
+    href="https://unpkg.com/maplibre-gl@5.13.0/dist/maplibre-gl.css"
+    rel="stylesheet"
+    crossorigin="anonymous">
+  <script
+    src="https://unpkg.com/maplibre-gl@5.13.0/dist/maplibre-gl.js"
+    crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/pmtiles@4.5.0/dist/pmtiles.js"></script>
+  <script>
+    if (typeof maplibregl === 'undefined' || typeof pmtiles === 'undefined') {
+      throw new Error('MapLibre GL JS or PMTiles failed to load.');
+    }
+    const protocol = new pmtiles.Protocol();
+    maplibregl.addProtocol("pmtiles", protocol.tile);
+  </script>
 </head>
 <body>
   <!--

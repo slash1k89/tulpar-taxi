@@ -1,9 +1,14 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 import '../../services/theme_service.dart';
 import '../../services/user_profile_service.dart';
+import '../../services/account_deletion_service.dart';
+import '../../app_routes.dart';
 import '../../widgets/app_drawer.dart';
+import '../../services/app_identity_service.dart';
+import '../../services/tulpar_auth_session.dart';
+import '../../services/voice_guidance_settings.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({
@@ -11,11 +16,15 @@ class ProfileScreen extends StatefulWidget {
     this.repository,
     this.themeController,
     this.userId,
+    this.accountDeletionController,
+    this.voiceGuidanceSettings,
   });
 
   final UserProfileRepository? repository;
   final ThemeController? themeController;
   final String? userId;
+  final AccountDeletionController? accountDeletionController;
+  final VoiceGuidanceSettings? voiceGuidanceSettings;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -29,20 +38,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   late final UserProfileRepository _repository;
   late final ThemeController _themeController;
+  late final VoiceGuidanceSettings _voiceGuidanceSettings;
   double _averageRating = 5;
   bool _isLoading = true;
   bool _isSaving = false;
+  bool _isDeleting = false;
   String? _loadError;
 
-  String? get _userId =>
-      widget.userId ?? FirebaseAuth.instance.currentUser?.uid;
+  String? get _userId => widget.userId ?? AppIdentityService().currentUserId;
 
   @override
   void initState() {
     super.initState();
     _repository = widget.repository ?? FirebaseUserProfileRepository();
     _themeController = widget.themeController ?? appThemeController;
+    _voiceGuidanceSettings =
+        widget.voiceGuidanceSettings ?? appVoiceGuidanceSettings;
+    _voiceGuidanceSettings.addListener(_handleVoiceSettingChanged);
+    _voiceGuidanceSettings.load();
     _loadUserData();
+  }
+
+  void _handleVoiceSettingChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -50,6 +68,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _nameController.dispose();
     _phoneController.dispose();
     _carController.dispose();
+    _voiceGuidanceSettings.removeListener(_handleVoiceSettingChanged);
     super.dispose();
   }
 
@@ -88,13 +107,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (!_formKey.currentState!.validate() || _isSaving) return;
     final userId = _userId;
     if (userId == null) return;
+    final isDriver = appModeFromRoute(context) == AppMode.driver;
 
     setState(() => _isSaving = true);
     try {
       await _repository.update(
         userId: userId,
         name: _nameController.text.trim(),
-        carModel: _carController.text.trim(),
+        carModel: isDriver ? _carController.text.trim() : '',
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -125,6 +145,108 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
     } finally {
       if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<bool> _confirmDeletion({required bool finalConfirmation}) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            key: Key(
+              finalConfirmation
+                  ? 'account_delete_second_dialog'
+                  : 'account_delete_first_dialog',
+            ),
+            title: Text(
+              finalConfirmation ? 'Точно удалить аккаунт?' : 'Удалить аккаунт?',
+            ),
+            content: Text(
+              finalConfirmation
+                  ? 'После продолжения восстановить аккаунт и личные данные будет невозможно.'
+                  : 'Это действие необратимо. Активные заказы и поездки необходимо сначала завершить или отменить.',
+            ),
+            actions: [
+              TextButton(
+                key: Key(
+                  finalConfirmation
+                      ? 'account_delete_second_cancel'
+                      : 'account_delete_first_cancel',
+                ),
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Отмена'),
+              ),
+              TextButton(
+                key: Key(
+                  finalConfirmation
+                      ? 'account_delete_second_confirm'
+                      : 'account_delete_first_confirm',
+                ),
+                onPressed: () => Navigator.pop(dialogContext, true),
+                style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+                child: Text(finalConfirmation ? 'Да, удалить' : 'Продолжить'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  Future<String?> _requestCurrentPassword() async {
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const _PasswordConfirmationDialog(),
+    );
+  }
+
+  Future<void> _deleteAccount() async {
+    if (TulparAuthController.instance.hasSession &&
+        widget.accountDeletionController == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Для удаления аккаунта потребуется повторное подтверждение звонком.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (_isDeleting || !await _confirmDeletion(finalConfirmation: false)) {
+      return;
+    }
+    if (!mounted || !await _confirmDeletion(finalConfirmation: true)) return;
+    if (!mounted) return;
+    final password = await _requestCurrentPassword();
+    if (!mounted || password == null) return;
+
+    setState(() => _isDeleting = true);
+    try {
+      final controller =
+          widget.accountDeletionController ??
+          DefaultAccountDeletionController();
+      final outcome = await controller.deleteWithPassword(password);
+      if (!mounted) return;
+      final message = outcome == AccountDeletionOutcome.deleted
+          ? 'Аккаунт удалён.'
+          : 'Запрос на удаление принят. Завершение удаления может занять некоторое время.';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+      Navigator.of(
+        context,
+      ).pushNamedAndRemoveUntil(AppRoutes.login, (route) => false);
+    } on AccountDeletionException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Не удалось удалить аккаунт.')),
+      );
+    } finally {
+      if (mounted) setState(() => _isDeleting = false);
     }
   }
 
@@ -195,16 +317,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       prefixIcon: Icon(Icons.phone_outlined),
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  TextFormField(
-                    key: const Key('profile_car_field'),
-                    controller: _carController,
-                    decoration: const InputDecoration(
-                      labelText: 'Марка и модель авто (для водителя)',
-                      helperText: 'Пассажиру это поле заполнять не обязательно',
-                      prefixIcon: Icon(Icons.directions_car_outlined),
+                  if (mode == AppMode.driver) ...[
+                    const SizedBox(height: 20),
+                    TextFormField(
+                      key: const Key('profile_car_field'),
+                      controller: _carController,
+                      decoration: const InputDecoration(
+                        labelText: 'Марка и модель авто',
+                        prefixIcon: Icon(Icons.directions_car_outlined),
+                      ),
                     ),
-                  ),
+                  ],
                   const SizedBox(height: 20),
                   DropdownButtonFormField<AppThemePreference>(
                     key: const Key('theme_preference_field'),
@@ -233,6 +356,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       }
                     },
                   ),
+                  const SizedBox(height: 12),
+                  SwitchListTile(
+                    key: const Key('voice_guidance_setting'),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Голосовые подсказки'),
+                    subtitle: const Text(
+                      'Озвучивать манёвры во время навигации',
+                    ),
+                    secondary: const Icon(Icons.volume_up_outlined),
+                    value: _voiceGuidanceSettings.enabled,
+                    onChanged: _voiceGuidanceSettings.setEnabled,
+                  ),
                   const SizedBox(height: 24),
                   ElevatedButton(
                     key: const Key('save_profile_button'),
@@ -247,9 +382,85 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           )
                         : const Text('Сохранить данные'),
                   ),
+                  const SizedBox(height: 28),
+                  const Divider(),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    key: const Key('delete_account_button'),
+                    onPressed: _isDeleting ? null : _deleteAccount,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.redAccent,
+                      side: const BorderSide(color: Colors.redAccent),
+                      minimumSize: const Size.fromHeight(50),
+                    ),
+                    icon: _isDeleting
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.delete_forever_outlined),
+                    label: const Text('Удалить аккаунт'),
+                  ),
                 ],
               ),
             ),
+    );
+  }
+}
+
+class _PasswordConfirmationDialog extends StatefulWidget {
+  const _PasswordConfirmationDialog();
+
+  @override
+  State<_PasswordConfirmationDialog> createState() =>
+      _PasswordConfirmationDialogState();
+}
+
+class _PasswordConfirmationDialogState
+    extends State<_PasswordConfirmationDialog> {
+  final _controller = TextEditingController();
+  String? _errorText;
+
+  @override
+  void dispose() {
+    _controller.clear();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      key: const Key('account_delete_password_dialog'),
+      title: const Text('Подтвердите пароль'),
+      content: TextField(
+        key: const Key('account_delete_password_field'),
+        controller: _controller,
+        obscureText: true,
+        autofocus: true,
+        decoration: InputDecoration(
+          labelText: 'Текущий пароль',
+          errorText: _errorText,
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const Key('account_delete_password_cancel'),
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Отмена'),
+        ),
+        FilledButton(
+          key: const Key('account_delete_password_confirm'),
+          onPressed: () {
+            if (_controller.text.isEmpty) {
+              setState(() => _errorText = 'Введите пароль');
+              return;
+            }
+            Navigator.pop(context, _controller.text);
+          },
+          child: const Text('Удалить аккаунт'),
+        ),
+      ],
     );
   }
 }

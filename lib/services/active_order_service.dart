@@ -2,11 +2,23 @@ import 'tulpar_api_client.dart';
 
 const activeOrderStatuses = {
   'searching',
+  'queued',
   'accepted',
   'arrived',
   'driver_arrived',
   'in_progress',
 };
+
+const terminalOrderStatuses = {'completed', 'cancelled', 'expired'};
+
+bool isTerminalOrderStatus(Object? status) =>
+    terminalOrderStatuses.contains(status?.toString());
+
+bool isActiveOrderStatusForRole(Object? status, {required bool isDriver}) {
+  final value = status?.toString();
+  if (!activeOrderStatuses.contains(value)) return false;
+  return !(isDriver && value == 'queued');
+}
 
 class ActiveOrder {
   const ActiveOrder({
@@ -48,7 +60,8 @@ class ActiveOrderService {
         return null;
       }
 
-      if (rawStatus == null || !activeOrderStatuses.contains(rawStatus)) {
+      if (rawStatus == null ||
+          !isActiveOrderStatusForRole(rawStatus, isDriver: role == 'driver')) {
         return null;
       }
 

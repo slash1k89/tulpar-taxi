@@ -1,6 +1,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
 
+import '../models/next_order.dart';
 import 'tulpar_api_client.dart';
+import 'app_identity_service.dart';
 
 class OrderWorkflowException implements Exception {
   const OrderWorkflowException(this.message);
@@ -13,10 +15,10 @@ class OrderWorkflowException implements Exception {
 
 class OrderWorkflowService {
   OrderWorkflowService({FirebaseAuth? auth, TulparApiClient? apiClient})
-    : _auth = auth ?? FirebaseAuth.instance,
+    : _identity = AppIdentityService(firebaseAuth: auth),
       _apiClient = apiClient ?? TulparApiClient();
 
-  final FirebaseAuth _auth;
+  final AppIdentityService _identity;
   final TulparApiClient _apiClient;
 
   Future<void> acceptOrder(String orderId) async {
@@ -24,6 +26,16 @@ class OrderWorkflowService {
 
     try {
       await _apiClient.acceptOrder(orderId);
+    } on TulparApiException catch (error) {
+      throw OrderWorkflowException(_messageForApiError(error));
+    }
+  }
+
+  Future<NextOrderAcceptanceResult> acceptNextOrder(String orderId) async {
+    _requireUser();
+
+    try {
+      return await _apiClient.acceptNextOrder(orderId);
     } on TulparApiException catch (error) {
       throw OrderWorkflowException(_messageForApiError(error));
     }
@@ -60,6 +72,15 @@ class OrderWorkflowService {
     }
   }
 
+  Future<CompleteOrderResult> completeOrder(String orderId) async {
+    _requireUser();
+    try {
+      return await _apiClient.completeRide(orderId);
+    } on TulparApiException catch (error) {
+      throw OrderWorkflowException(_messageForApiError(error));
+    }
+  }
+
   Future<void> cancelOrder(String orderId) async {
     _requireUser();
 
@@ -86,14 +107,12 @@ class OrderWorkflowService {
     }
   }
 
-  User _requireUser() {
-    final user = _auth.currentUser;
-
-    if (user == null) {
+  String _requireUser() {
+    final userId = _identity.currentUserId;
+    if (userId == null) {
       throw const OrderWorkflowException('ойдите в аккаунт, чтобы продолжить.');
     }
-
-    return user;
+    return userId;
   }
 
   String _messageForApiError(TulparApiException error) {

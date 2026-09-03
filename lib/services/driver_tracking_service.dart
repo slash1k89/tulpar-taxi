@@ -1,16 +1,16 @@
 import 'dart:async';
 
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import 'tulpar_api_client.dart';
+import 'app_identity_service.dart';
 
 class DriverTrackingService {
   static const Duration serverWriteInterval = Duration(seconds: 3);
 
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final AppIdentityService _identity = AppIdentityService();
   final TulparApiClient _apiClient = TulparApiClient();
 
   StreamSubscription<Position>? _positionStreamSubscription;
@@ -21,10 +21,19 @@ class DriverTrackingService {
 
   bool _isDisposed = false;
   int _trackingSession = 0;
+  double? _latestAccuracyMeters;
+  double? _latestHeadingDegrees;
+  double? _latestSpeedMetersPerSecond;
 
   ValueListenable<LatLng?> get positionListenable => _positionNotifier;
 
   LatLng? get latestPosition => _positionNotifier.value;
+
+  double? get latestAccuracyMeters => _latestAccuracyMeters;
+
+  double? get latestHeadingDegrees => _latestHeadingDegrees;
+
+  double? get latestSpeedMetersPerSecond => _latestSpeedMetersPerSecond;
 
   Future<DriverTrackingResult> startLocationUpdates(String orderId) async {
     if (_isDisposed) {
@@ -35,9 +44,7 @@ class DriverTrackingService {
 
     final session = ++_trackingSession;
 
-    final user = _auth.currentUser;
-
-    if (user == null) {
+    if (!_identity.isAuthenticated) {
       return const DriverTrackingResult.failure('ойдите в аккаунт водителя.');
     }
 
@@ -152,6 +159,9 @@ class DriverTrackingService {
       return;
     }
 
+    _latestAccuracyMeters = position.accuracy;
+    _latestHeadingDegrees = position.heading;
+    _latestSpeedMetersPerSecond = position.speed;
     _positionNotifier.value = LatLng(position.latitude, position.longitude);
   }
 

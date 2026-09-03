@@ -1,0 +1,23 @@
+test/
+integration-test/
+migrations/
+src/*.bak-*
+src/smoke-test*.js
+
+# Never send local credentials or dependencies into the Docker build context.
+node_modules/
+.env
+.env.*
+!.env.example
+*.env
+*.env.*
+!*.env.example
+secrets/
+*service-account*.json
+*service_account*.json
+*firebase-adminsdk*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.log

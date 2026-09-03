@@ -1,8 +1,13 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:taxi_esil/screens/driver/driver_onboarding_screen.dart';
 import 'package:taxi_esil/services/driver_agreement_service.dart';
 import 'package:taxi_esil/services/driver_profile_service.dart';
+import 'package:taxi_esil/services/tulpar_api_client.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+
+import 'dart:convert';
 
 void main() {
   test('driver profile parser and flow do not depend on users.role', () {
@@ -47,6 +52,46 @@ void main() {
       DriverOnboardingStep.agreement,
     );
   });
+
+  test(
+    'vehicle submission reloads and returns the backend profile status',
+    () async {
+      final methods = <String>[];
+      final api = TulparApiClient(
+        tokenProvider: () async => 'test-token',
+        client: MockClient((request) async {
+          methods.add('${request.method} ${request.url.path}');
+          return http.Response(
+            jsonEncode({
+              'userId': 'user-1',
+              'status': request.method == 'GET' ? 'active' : 'pending',
+              'carModel': 'Toyota Camry',
+              'carColor': 'White',
+              'carNumber': '777 ABC 01',
+              'agreementVersion': DriverAgreementService.currentVersion,
+              'agreementAcceptedAt': '2026-08-17T00:00:00.000Z',
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }),
+      );
+      final repository = ApiDriverProfileRepository(apiClient: api);
+
+      final profile = await repository.submitVehicle(
+        userId: 'user-1',
+        carModel: 'Toyota Camry',
+        carColor: 'White',
+        carNumber: '777 ABC 01',
+      );
+
+      expect(methods, [
+        'POST /api/driver-profile/vehicle',
+        'GET /api/driver-profile/me',
+      ]);
+      expect(profile.status, DriverProfileStatus.approved);
+    },
+  );
 
   testWidgets(
     'new user accepts agreement, enters vehicle and becomes pending',
@@ -141,6 +186,51 @@ void main() {
     expect(find.byType(CheckboxListTile), findsNothing);
   });
 
+  testWidgets(
+    'active vehicle submission opens driver destination immediately',
+    (tester) async {
+      final repository = _FakeDriverProfileRepository(
+        submittedStatus: DriverProfileStatus.approved,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: DriverOnboardingScreen(
+            repository: repository,
+            userId: 'user-1',
+            driverDestinationBuilder: (_) =>
+                const Scaffold(body: Text('Driver orders ready')),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(CheckboxListTile));
+      await tester.pump();
+      await tester.tap(find.byType(ElevatedButton));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('driver_car_model_field')),
+        'Toyota Camry',
+      );
+      await tester.enterText(
+        find.byKey(const Key('driver_car_color_field')),
+        'White',
+      );
+      await tester.enterText(
+        find.byKey(const Key('driver_car_number_field')),
+        '777 ABC 01',
+      );
+      await tester.tap(
+        find.byKey(const Key('submit_driver_application_button')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Driver orders ready'), findsOneWidget);
+      expect(find.text('Профиль водителя активирован'), findsOneWidget);
+      expect(find.byIcon(Icons.hourglass_top), findsNothing);
+    },
+  );
+
   testWidgets('suspended profile shows notice and blocks driver destination', (
     tester,
   ) async {
@@ -184,10 +274,13 @@ DriverProfile _profile(DriverProfileStatus status) {
 }
 
 class _FakeDriverProfileRepository implements DriverProfileRepository {
-  _FakeDriverProfileRepository({DriverProfile? initialProfile})
-    : profile = initialProfile;
+  _FakeDriverProfileRepository({
+    DriverProfile? initialProfile,
+    this.submittedStatus = DriverProfileStatus.pending,
+  }) : profile = initialProfile;
 
   DriverProfile? profile;
+  final DriverProfileStatus submittedStatus;
   String? lastCarNumber;
 
   @override
@@ -212,7 +305,7 @@ class _FakeDriverProfileRepository implements DriverProfileRepository {
   }
 
   @override
-  Future<void> submitVehicle({
+  Future<DriverProfile> submitVehicle({
     required String userId,
     required String carModel,
     required String carColor,
@@ -222,7 +315,7 @@ class _FakeDriverProfileRepository implements DriverProfileRepository {
     final now = DateTime.utc(2026, 8, 17);
     profile = DriverProfile(
       userId: userId,
-      status: DriverProfileStatus.pending,
+      status: submittedStatus,
       carModel: carModel.trim(),
       carColor: carColor.trim(),
       carNumber: lastCarNumber!,
@@ -233,5 +326,6 @@ class _FakeDriverProfileRepository implements DriverProfileRepository {
       createdAt: now,
       updatedAt: now,
     );
+    return profile!;
   }
 }

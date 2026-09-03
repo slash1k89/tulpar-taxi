@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: tulpar-postgres
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    networks:
+      - tulpar-internal
+
+  backend:
+    build:
+      context: ./backend
+
+    container_name: tulpar-backend
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      NODE_ENV: production
+      TRUST_PROXY_HOPS: 1
+      DB_HOST: postgres
+      DB_PORT: 5432
+      PORT: 3000
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-service-account.json
+
+    volumes:
+      - ./secrets/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    ports:
+      - "127.0.0.1:3000:3000"
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - tulpar-internal
+
+networks:
+  tulpar-internal:
+    driver: bridge

@@ -7,6 +7,15 @@ import 'firebase_options.dart';
 import 'app_routes.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/driver/driver_onboarding_screen.dart';
+import 'screens/driver/driver_intercity_screen.dart';
+import 'screens/driver/driver_intercity_mode_screen.dart';
+import 'screens/driver/intercity_create_ride_screen.dart';
+import 'screens/driver/intercity_driver_rides_screen.dart';
+import 'screens/driver/driver_screen.dart';
+import 'screens/intercity/intercity_bookings_screen.dart';
+import 'screens/intercity/intercity_mode_screen.dart';
+import 'screens/intercity/intercity_request_screen.dart';
+import 'screens/intercity/intercity_ride_search_screen.dart';
 import 'screens/map/map_screen.dart';
 import 'screens/profile/history_screen.dart';
 import 'screens/profile/profile_screen.dart';
@@ -14,6 +23,8 @@ import 'screens/splash_screen.dart';
 import 'services/push_notification_service.dart';
 import 'services/startup_diagnostics.dart';
 import 'services/theme_service.dart';
+import 'services/tulpar_auth_session.dart';
+import 'models/order_service_type.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 final scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
@@ -37,34 +48,40 @@ void main() {
     StartupDiagnostics.mark('first Flutter frame');
     unawaited(_loadTheme());
     if (!_useFirebaseEmulators) {
-      unawaited(
-        Future<void>.delayed(
-          const Duration(seconds: 6),
-        ).then((_) => _initializeDeferredServices(requiredInitialization)),
-      );
+      unawaited(_initializeDeferredServices(requiredInitialization));
     }
   });
 }
 
+Future<void>? _firebaseInitialization;
+
+Future<void> _initializeFirebase() => _firebaseInitialization ??= () async {
+  if (Firebase.apps.isEmpty) {
+    try {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform.copyWith(
+          databaseURL: 'https://taxi-esil-default-rtdb.firebaseio.com',
+        ),
+      );
+    } on FirebaseException catch (error) {
+      if (error.code != 'duplicate-app') rethrow;
+      Firebase.app();
+      StartupDiagnostics.mark('Firebase default app reused');
+    }
+  }
+  StartupDiagnostics.mark('Firebase initialized');
+}();
+
 Future<void> _initializeRequiredServices() async {
   try {
-    if (Firebase.apps.isEmpty) {
-      try {
-        await Firebase.initializeApp(
-          options: DefaultFirebaseOptions.currentPlatform.copyWith(
-            databaseURL: 'https://taxi-esil-default-rtdb.firebaseio.com',
-          ),
-        );
-      } on FirebaseException catch (error) {
-        // Android may create the default app from google-services.xml while
-        // the Dart initialization request is already in flight. In that
-        // narrow race the requested app is ready, so verify and reuse it.
-        if (error.code != 'duplicate-app') rethrow;
-        Firebase.app();
-        StartupDiagnostics.mark('Firebase default app reused');
-      }
+    final hasTulparSession = await TulparAuthController.instance.restore();
+    StartupDiagnostics.mark('Tulpar auth restored');
+
+    if (!hasTulparSession || _useFirebaseEmulators) {
+      await _initializeFirebase();
+    } else {
+      StartupDiagnostics.mark('Firebase initialization deferred');
     }
-    StartupDiagnostics.mark('Firebase initialized');
 
     if (_useFirebaseEmulators) await _connectFirebaseEmulators();
   } catch (error, stackTrace) {
@@ -86,15 +103,29 @@ Future<void> _loadTheme() async {
 Future<void> _initializeDeferredServices(
   Future<void> requiredInitialization,
 ) async {
+  // Required/auth failures still belong to the startup screen.
   try {
     await requiredInitialization;
-    await PushNotificationService().initialize(
+  } catch (_) {
+    return;
+  }
+  PushNotificationService? push;
+  try {
+    await _initializeFirebase();
+    push = PushNotificationService();
+    await push.initialize(
       navigatorKey: navigatorKey,
       messengerKey: scaffoldMessengerKey,
     );
     StartupDiagnostics.mark('push notifications initialized');
   } catch (error) {
     StartupDiagnostics.error('deferred services failed', error);
+    await push?.dispose();
+    _firebaseInitialization = null;
+    // Retry optional FCM setup without delaying auth or the first screen.
+    Timer(const Duration(seconds: 30), () {
+      unawaited(_initializeDeferredServices(requiredInitialization));
+    });
   }
 }
 
@@ -167,7 +198,27 @@ class TaxiApp extends StatelessWidget {
           elevatedButtonTheme: _elevatedButtonTheme(),
         ),
         routes: {
-          AppRoutes.map: (_) => const MapScreen(),
+          AppRoutes.map: (_) =>
+              const MapScreen(serviceType: OrderServiceType.city),
+          AppRoutes.delivery: (_) =>
+              const MapScreen(serviceType: OrderServiceType.delivery),
+          AppRoutes.intercity: (_) => const IntercityModeScreen(),
+          AppRoutes.intercityOrder: (_) =>
+              const MapScreen(serviceType: OrderServiceType.intercity),
+          AppRoutes.intercityRideSearch: (_) =>
+              const IntercityRideSearchScreen(),
+          AppRoutes.intercityBookings: (_) => const IntercityBookingsScreen(),
+          AppRoutes.intercityRequests: (_) => const IntercityRequestScreen(),
+          AppRoutes.driverTaxi: (_) =>
+              const DriverScreen(serviceType: OrderServiceType.city),
+          AppRoutes.driverDelivery: (_) =>
+              const DriverScreen(serviceType: OrderServiceType.delivery),
+          AppRoutes.driverIntercity: (_) => const DriverIntercityModeScreen(),
+          AppRoutes.driverIntercityOrders: (_) => const DriverIntercityScreen(),
+          AppRoutes.driverIntercityRides: (_) =>
+              const IntercityDriverRidesScreen(),
+          AppRoutes.driverIntercityCreate: (_) =>
+              const IntercityCreateRideScreen(),
           AppRoutes.driverOnboarding: (_) => const DriverOnboardingScreen(),
           AppRoutes.history: (_) => const HistoryScreen(),
           AppRoutes.profile: (_) => const ProfileScreen(),

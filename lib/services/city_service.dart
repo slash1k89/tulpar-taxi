@@ -1,5 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/city.dart';
+
 class CityService {
   static const String _key = 'selected_city_id';
 
@@ -14,4 +16,7 @@ class CityService {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_key) ?? 'esil';
   }
+
+  static Future<City> getSelectedCityDetails() async =>
+      cityById(await getSelectedCity());
 }

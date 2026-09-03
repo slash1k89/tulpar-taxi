@@ -1,12 +1,13 @@
 import 'dart:async';
 
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 import '../../services/driver_profile_service.dart';
 import '../../widgets/app_drawer.dart';
 import 'driver_agreement_screen.dart';
 import 'driver_screen.dart';
+import '../../services/app_identity_service.dart';
 
 class DriverOnboardingScreen extends StatefulWidget {
   const DriverOnboardingScreen({
@@ -41,7 +42,7 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
   void initState() {
     super.initState();
     _repository = widget.repository ?? FirebaseDriverProfileRepository();
-    _userId = widget.userId ?? FirebaseAuth.instance.currentUser?.uid ?? '';
+    _userId = widget.userId ?? AppIdentityService().currentUserId ?? '';
     _loadProfile();
   }
 
@@ -87,13 +88,17 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
     if (_isSubmitting || !_formKey.currentState!.validate()) return;
     setState(() => _isSubmitting = true);
     try {
-      await _repository.submitVehicle(
+      final profile = await _repository.submitVehicle(
         userId: _userId,
         carModel: _carModelController.text,
         carColor: _carColorController.text,
         carNumber: _carNumberController.text,
       );
-      await _loadProfile();
+      if (!mounted) return;
+      setState(() => _profile = profile);
+      if (profile.status == DriverProfileStatus.approved) {
+        _showMessage('Профиль водителя активирован');
+      }
     } on TimeoutException {
       _showMessage('Сервер не ответил. Попробуйте ещё раз.');
     } on FirebaseException catch (error) {

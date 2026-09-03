@@ -1,9 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../services/tulpar_api_client.dart';
+import '../../services/app_identity_service.dart';
 
 class ChatScreen extends StatefulWidget {
   final String orderId;
@@ -20,7 +20,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   final TulparApiClient _api = TulparApiClient();
 
-  final String _currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
+  final String _currentUserId = AppIdentityService().currentUserId ?? '';
 
   Timer? _refreshTimer;
 

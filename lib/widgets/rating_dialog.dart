@@ -7,6 +7,7 @@ class RatingDialog extends StatefulWidget {
   final String orderId;
   final bool isRatingDriver;
   final RatingService? ratingService;
+  final String? targetLabel;
 
   const RatingDialog({
     super.key,
@@ -14,6 +15,7 @@ class RatingDialog extends StatefulWidget {
     required this.orderId,
     required this.isRatingDriver,
     this.ratingService,
+    this.targetLabel,
   });
 
   @override
@@ -23,6 +25,13 @@ class RatingDialog extends StatefulWidget {
 class _RatingDialogState extends State<RatingDialog> {
   int _rating = 5;
   bool _isSubmitting = false;
+  final _commentController = TextEditingController();
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    super.dispose();
+  }
 
   Future<void> _submitRating() async {
     if (_isSubmitting) return;
@@ -34,6 +43,7 @@ class _RatingDialogState extends State<RatingDialog> {
         orderId: widget.orderId,
         targetUserId: widget.targetUserId,
         score: _rating,
+        comment: widget.isRatingDriver ? _commentController.text.trim() : null,
       );
 
       if (!mounted) return;
@@ -67,25 +77,55 @@ class _RatingDialogState extends State<RatingDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
       title: Text(
-        widget.isRatingDriver
-            ? '\u041e\u0446\u0435\u043d\u0438\u0442\u0435 \u0432\u043e\u0434\u0438\u0442\u0435\u043b\u044f'
-            : '\u041e\u0446\u0435\u043d\u0438\u0442\u0435 \u043f\u0430\u0441\u0441\u0430\u0436\u0438\u0440\u0430',
+        'Оцените ${widget.targetLabel ?? (widget.isRatingDriver ? 'водителя' : 'пассажира')}',
       ),
-      content: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: List.generate(5, (index) {
-          return IconButton(
-            icon: Icon(
-              index < _rating ? Icons.star : Icons.star_border,
-              color: Colors.amber,
-              size: 36,
+      content: SizedBox(
+        width: 320,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Wrap(
+              alignment: WrapAlignment.center,
+              children: List.generate(5, (index) {
+                return SizedBox.square(
+                  dimension: 48,
+                  child: IconButton(
+                    key: ValueKey('rating_star_${index + 1}'),
+                    tooltip: '${index + 1} из 5',
+                    padding: const EdgeInsets.all(6),
+                    icon: Icon(
+                      index < _rating ? Icons.star : Icons.star_border,
+                      color: Colors.amber,
+                      size: 32,
+                    ),
+                    onPressed: _isSubmitting
+                        ? null
+                        : () => setState(() => _rating = index + 1),
+                  ),
+                );
+              }),
             ),
-            onPressed: _isSubmitting
-                ? null
-                : () => setState(() => _rating = index + 1),
-          );
-        }),
+            if (widget.isRatingDriver) ...[
+              const SizedBox(height: 16),
+              TextField(
+                key: const Key('rating_review'),
+                controller: _commentController,
+                enabled: !_isSubmitting,
+                minLines: 2,
+                maxLines: 4,
+                maxLength: 500,
+                decoration: const InputDecoration(
+                  hintText: 'Напишите отзыв (необязательно)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
       actions: [
         TextButton(

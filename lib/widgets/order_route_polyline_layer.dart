@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'tulpar_map_visuals.dart';
+
 const orderRoutePolylineLayerKey = Key('order_route_polyline_layer');
 
 class OrderRoutePolylineLayer extends StatelessWidget {
@@ -28,9 +30,7 @@ class OrderRoutePolylineLayer extends StatelessWidget {
         });
         return PolylineLayer(
           key: orderRoutePolylineLayerKey,
-          polylines: [
-            Polyline(points: points, strokeWidth: 5, color: Colors.amber),
-          ],
+          polylines: [TulparMapVisuals.routePolyline(points)],
         );
       },
     );

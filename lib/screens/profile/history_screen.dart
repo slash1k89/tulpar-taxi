@@ -1,28 +1,35 @@
 import 'package:flutter/material.dart';
 
+import '../../models/order_service_type.dart';
 import '../../services/tulpar_api_client.dart';
 import '../../widgets/app_drawer.dart';
 
 class HistoryScreen extends StatefulWidget {
-  const HistoryScreen({super.key});
+  const HistoryScreen({super.key, this.historyLoader});
+
+  final Future<List<Map<String, dynamic>>> Function()? historyLoader;
 
   @override
   State<HistoryScreen> createState() => _HistoryScreenState();
 }
 
 class _HistoryScreenState extends State<HistoryScreen> {
-  final TulparApiClient _api = TulparApiClient();
+  TulparApiClient? _api;
 
   late Future<List<Map<String, dynamic>>> _historyFuture;
 
   @override
   void initState() {
     super.initState();
-    _historyFuture = _api.getOrderHistory();
+    _historyFuture = _loadHistory();
   }
 
+  Future<List<Map<String, dynamic>>> _loadHistory() =>
+      widget.historyLoader?.call() ??
+      (_api ??= TulparApiClient()).getOrderHistory();
+
   Future<void> _refresh() async {
-    final future = _api.getOrderHistory();
+    final future = _loadHistory();
 
     setState(() {
       _historyFuture = future;
@@ -135,10 +142,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
               itemBuilder: (context, index) {
                 final order = orders[index];
 
-                final isCompleted = order['status'] == 'completed';
+                final status = order['status']?.toString() ?? '';
+                final isCompleted = status == 'completed';
+                final serviceType = OrderServiceType.fromValue(
+                  order['serviceType'],
+                );
 
-                final from = _address(order['fromAddress']);
-                final to = _address(order['toAddress']);
+                final from = _address(
+                  order['fromAddress'] ?? order['pickupAddress'],
+                );
+                final to = _address(
+                  order['toAddress'] ?? order['destinationAddress'],
+                );
                 final date = _dateText(order);
 
                 return Card(
@@ -151,18 +166,21 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(
-                          isCompleted ? Icons.check_circle : Icons.cancel,
-                          color: isCompleted ? Colors.green : Colors.red,
-                          size: 30,
-                        ),
+                        Icon(serviceType.icon, color: Colors.amber, size: 30),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                '$from ? $to',
+                                serviceType.title,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '$from → $to',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w600,
                                   fontSize: 15,
@@ -170,7 +188,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                               ),
                               const SizedBox(height: 7),
                               Text(
-                                '${_price(order)} ?',
+                                '${_price(order)} ₸',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -198,7 +216,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          isCompleted ? 'Завершен' : 'Отменен',
+                          isCompleted
+                              ? 'Завершён'
+                              : status == 'cancelled'
+                              ? 'Отменён'
+                              : status,
                           style: TextStyle(
                             color: isCompleted ? Colors.green : Colors.red,
                             fontWeight: FontWeight.bold,

@@ -4,6 +4,7 @@ import '../chat/chat_screen.dart';
 import '../../services/driver_tracking_service.dart';
 import '../../services/order_workflow_service.dart';
 import '../../services/tulpar_api_client.dart';
+import '../../widgets/delivery_details_view.dart';
 
 class DriverOrderScreen extends StatefulWidget {
   const DriverOrderScreen({super.key, required this.orderId});
@@ -274,6 +275,13 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
                             ),
                           ],
                         ),
+                        if (DeliveryDetailsView.isDelivery(data)) ...[
+                          const Divider(color: Colors.white24, height: 24),
+                          DeliveryDetailsView(
+                            orderData: data,
+                            enableRecipientCall: true,
+                          ),
+                        ],
                         const Divider(color: Colors.white24, height: 24),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,

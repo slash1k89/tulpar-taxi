@@ -89,6 +89,75 @@ void main() {
     expect(error.activeOrderId, 'active-order-1');
   });
 
+  test('delivery draft keeps delivery fields and skips city minimum', () async {
+    final gateway = _RecordingOrderGateway();
+    final service = OrderCreationService(gateway: gateway);
+
+    await service.createOrder(
+      fromAddress: 'Пункт забора',
+      toAddress: 'Пункт доставки',
+      price: 300,
+      fromPoint: from,
+      toPoint: to,
+      cityId: 'esil',
+      serviceType: 'delivery',
+      delivery: const DeliveryOrderDetails(
+        itemDescription: 'Документы',
+        recipientName: 'Алия',
+        recipientPhone: '+7 700 000 00 00',
+        destinationApartment: '25',
+      ),
+    );
+
+    expect(gateway.lastDraft?.serviceType, 'delivery');
+    expect(gateway.lastDraft?.delivery?.itemDescription, 'Документы');
+    expect(gateway.lastDraft?.delivery?.recipientName, 'Алия');
+    expect(gateway.lastDraft?.delivery?.recipientPhone, '+7 700 000 00 00');
+    expect(gateway.lastDraft?.delivery?.destinationApartment, '25');
+    expect(
+      gateway.lastDraft?.delivery?.normalizedRecipientPhone,
+      '+77000000000',
+    );
+  });
+
+  test('delivery rejects an incomplete recipient phone', () {
+    const details = DeliveryOrderDetails(
+      itemDescription: 'Документы',
+      recipientName: 'Алия',
+      recipientPhone: '+7 (700) 123-45',
+    );
+
+    expect(details.validate, throwsA(isA<OrderCreationException>()));
+  });
+
+  test('delivery requires parcel and recipient details', () {
+    const draft = OrderDraft(
+      fromAddress: 'Пункт забора',
+      toAddress: 'Пункт доставки',
+      price: 300,
+      fromPoint: from,
+      toPoint: to,
+      cityId: 'esil',
+      serviceType: 'delivery',
+      delivery: DeliveryOrderDetails(
+        itemDescription: '',
+        recipientName: 'Алия',
+        recipientPhone: '+7 700 000 00 00',
+      ),
+    );
+
+    expect(
+      draft.validate,
+      throwsA(
+        isA<OrderCreationException>().having(
+          (error) => error.failure,
+          'failure',
+          OrderCreationFailure.invalidData,
+        ),
+      ),
+    );
+  });
+
   testWidgets('repeated taps share one in-flight creation', (tester) async {
     final gateway = _CompletingOrderGateway();
     final service = OrderCreationService(gateway: gateway);

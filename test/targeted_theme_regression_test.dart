@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:taxi_esil/screens/auth/register_screen.dart';
 import 'package:taxi_esil/screens/driver/driver_onboarding_screen.dart';
@@ -113,10 +113,10 @@ class _VehicleStepRepository implements DriverProfileRepository {
   Future<void> acceptCurrentAgreement(String userId) async {}
 
   @override
-  Future<void> submitVehicle({
+  Future<DriverProfile> submitVehicle({
     required String userId,
     required String carModel,
     required String carColor,
     required String carNumber,
-  }) async {}
+  }) async => (await load(userId))!;
 }

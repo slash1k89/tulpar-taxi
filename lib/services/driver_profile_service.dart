@@ -139,7 +139,7 @@ abstract interface class DriverProfileRepository {
 
   Future<void> acceptCurrentAgreement(String userId);
 
-  Future<void> submitVehicle({
+  Future<DriverProfile> submitVehicle({
     required String userId,
     required String carModel,
     required String carColor,
@@ -216,7 +216,7 @@ class ApiDriverProfileRepository implements DriverProfileRepository {
   }
 
   @override
-  Future<void> submitVehicle({
+  Future<DriverProfile> submitVehicle({
     required String userId,
     required String carModel,
     required String carColor,
@@ -241,13 +241,17 @@ class ApiDriverProfileRepository implements DriverProfileRepository {
     }
 
     try {
-      await _apiClient
+      final submitted = await _apiClient
           .submitCurrentDriverVehicle(
             carModel: normalizedModel,
             carColor: normalizedColor,
             carNumber: normalizedNumber,
           )
           .timeout(const Duration(seconds: 10));
+      final refreshed = await _apiClient.getCurrentDriverProfile().timeout(
+        const Duration(seconds: 10),
+      );
+      return DriverProfile.fromApi(refreshed ?? submitted);
     } on TimeoutException {
       rethrow;
     } on TulparApiException catch (error) {

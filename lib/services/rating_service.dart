@@ -7,6 +7,7 @@ abstract interface class RatingService {
     required String orderId,
     required String targetUserId,
     required int score,
+    String? comment,
   });
 }
 
@@ -21,11 +22,16 @@ class FirebaseRatingService implements RatingService {
     required String orderId,
     required String targetUserId,
     required int score,
+    String? comment,
   }) async {
     // targetUserId ???????? ? ?????????? ??? ????????????? ? UI.
     // ? VPS ?????????? ?????? ???????????? ?? ?????????? ??????.
     try {
-      await _apiClient.submitRating(orderId: orderId, score: score);
+      await _apiClient.submitRating(
+        orderId: orderId,
+        score: score,
+        comment: comment,
+      );
     } on TulparApiException catch (error, stackTrace) {
       debugPrint(
         'submitRating failed: status=${error.statusCode}, '
@@ -60,7 +66,7 @@ class FirebaseRatingService implements RatingService {
     }
 
     if (error.statusCode == 400) {
-      return 'Поставьте оценку от 1 до 5.';
+      return 'Поставьте оценку от 1 до 5. Отзыв — не более 500 символов.';
     }
 
     return 'Не удалось отправить оценку. Попробуйте ещё раз.';

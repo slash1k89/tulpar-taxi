@@ -2,6 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import 'order_price_service.dart';
 import 'tulpar_api_client.dart';
+import 'app_identity_service.dart';
 
 class DriverOffer {
   const DriverOffer({
@@ -108,10 +109,10 @@ class OrderOfferException implements Exception {
 
 class OrderOfferService {
   OrderOfferService({FirebaseAuth? auth, TulparApiClient? apiClient})
-    : _auth = auth ?? FirebaseAuth.instance,
+    : _identity = AppIdentityService(firebaseAuth: auth),
       _apiClient = apiClient ?? TulparApiClient();
 
-  final FirebaseAuth _auth;
+  final AppIdentityService _identity;
   final TulparApiClient _apiClient;
 
   Stream<DriverOffer?> watchOwnOffer(String orderId) async* {
@@ -123,7 +124,7 @@ class OrderOfferService {
       for (final raw in offers) {
         final offer = DriverOffer.fromMap(raw);
 
-        if (offer.driverId == user.uid) {
+        if (offer.driverId == user) {
           own = offer;
           break;
         }
@@ -223,14 +224,12 @@ class OrderOfferService {
     }
   }
 
-  User _requireUser() {
-    final user = _auth.currentUser;
-
-    if (user == null) {
+  String _requireUser() {
+    final userId = _identity.currentUserId;
+    if (userId == null) {
       throw const OrderOfferException('Войдите в аккаунт, чтобы продолжить.');
     }
-
-    return user;
+    return userId;
   }
 
   String _messageForApiError(TulparApiException error) {

@@ -68,4 +68,10 @@ class DriverAgreementService {
       throw StateError('Driver agreement acceptance was not saved.');
     }
   }
+
+  Future<void> clearAcceptance(String userId) async {
+    if (userId.trim().isEmpty) return;
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.remove('$_keyPrefix$userId');
+  }
 }

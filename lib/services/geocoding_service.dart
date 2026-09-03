@@ -1,207 +1,264 @@
-﻿import 'dart:convert';
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:latlong2/latlong.dart';
+
 import '../models/address_suggestion.dart';
+import '../models/city.dart';
+import 'tulpar_api_client.dart';
+
+class KazakhstanSettlement {
+  const KazakhstanSettlement({
+    required this.id,
+    required this.name,
+    required this.region,
+    required this.lat,
+    required this.lng,
+  });
+  final String id;
+  final String name;
+  final String region;
+  final double lat;
+  final double lng;
+  String get displayName => region.isEmpty ? name : '$name, $region';
+  factory KazakhstanSettlement.fromCity(City city) => KazakhstanSettlement(
+    id: city.id,
+    name: city.name,
+    region: city.region,
+    lat: city.latitude,
+    lng: city.longitude,
+  );
+}
+
+class KazakhstanPointAddress {
+  const KazakhstanPointAddress({
+    required this.settlement,
+    required this.address,
+  });
+  final KazakhstanSettlement settlement;
+  final String address;
+}
 
 class GeocodingService {
-  // 1. Поиск подсказок при ручном вводе
+  static const requestTimeout = Duration(seconds: 9);
+
+  static TulparApiClient _api(http.Client? client) => TulparApiClient(
+    client: client,
+    tokenProvider: client == null ? null : () async => 'test-token',
+  );
+
+  static Future<List<KazakhstanSettlement>> searchKazakhstanSettlements({
+    required String query,
+    http.Client? client,
+  }) async {
+    final clean = query.trim();
+    if (clean.length < 2) return [];
+    try {
+      final rows = await _api(client)
+          .searchGeocoding(query: clean, kind: 'settlement')
+          .timeout(requestTimeout);
+      return rows
+          .map(_settlementFromApi)
+          .whereType<KazakhstanSettlement>()
+          .toList();
+    } catch (error) {
+      debugPrint('Kazakhstan settlement search failed: $error');
+      return [];
+    }
+  }
+
+  static Future<List<AddressSuggestion>> searchKazakhstanAddress({
+    required String query,
+    required KazakhstanSettlement settlement,
+    String? viewBox,
+    http.Client? client,
+  }) async {
+    final clean = query.trim();
+    if (clean.length < 2) return [];
+    try {
+      final rows = await _api(client)
+          .searchGeocoding(
+            query: clean,
+            kind: 'address',
+            settlement: settlement.name,
+            lat: settlement.lat,
+            lng: settlement.lng,
+          )
+          .timeout(requestTimeout);
+      return rows
+          .where((row) {
+            final address = row['address'];
+            return address is Map &&
+                address['country_code']?.toString().toLowerCase() == 'kz' &&
+                _matchesSettlement(address, settlement.name);
+          })
+          .map(_addressFromApi)
+          .whereType<AddressSuggestion>()
+          .toList();
+    } catch (error) {
+      debugPrint('Kazakhstan address search failed: $error');
+      return [];
+    }
+  }
+
+  static Future<List<AddressSuggestion>> searchCityAddress({
+    required String query,
+    required City city,
+    http.Client? client,
+  }) => searchKazakhstanAddress(
+    query: query,
+    settlement: KazakhstanSettlement.fromCity(city),
+    client: client,
+  );
+
+  static Future<bool> pointBelongsToCity(
+    LatLng point,
+    City city, {
+    http.Client? client,
+  }) async {
+    if (!city.contains(point)) return false;
+    final resolved = await reverseGeocodeKazakhstanChecked(
+      point.latitude,
+      point.longitude,
+      client: client,
+    );
+    return resolved != null && _namesMatch(resolved.settlement.name, city.name);
+  }
+
+  static Future<KazakhstanPointAddress?> reverseGeocodeKazakhstan(
+    double lat,
+    double lng, {
+    http.Client? client,
+  }) async {
+    try {
+      return await reverseGeocodeKazakhstanChecked(lat, lng, client: client);
+    } catch (error) {
+      debugPrint('Kazakhstan reverse geocoding failed: $error');
+      return null;
+    }
+  }
+
+  static Future<KazakhstanPointAddress?> reverseGeocodeKazakhstanChecked(
+    double lat,
+    double lng, {
+    http.Client? client,
+  }) async {
+    final data = await _api(
+      client,
+    ).reverseGeocoding(lat: lat, lng: lng).timeout(requestTimeout);
+    if (data['countryCode']?.toString().toLowerCase() != 'kz') return null;
+    final settlement = _settlementFromApi(data['settlement']);
+    final address = data['address']?.toString().trim() ?? '';
+    if (settlement == null || address.isEmpty) return null;
+    return KazakhstanPointAddress(settlement: settlement, address: address);
+  }
+
   static Future<List<AddressSuggestion>> searchAddress({
     required String query,
     required String cityName,
     double? cityLat,
     double? cityLng,
+    bool useCityBias = true,
+    http.Client? client,
   }) async {
-    final cleanQuery = query.trim();
-    if (cleanQuery.length < 2) return [];
-
-    // Уровень 1: поиск через Photon (текстовый запрос + геоприоритет по lat/lon)
+    final clean = query.trim();
+    if (clean.length < 2) return [];
     try {
-      final String urlStr =
-          'https://photon.komoot.io/api/?q=${Uri.encodeComponent(cleanQuery)}'
-          '&lang=ru&limit=7'
-          '${cityLat != null && cityLng != null ? "&lat=$cityLat&lon=$cityLng" : ""}';
-
-      final Uri url = Uri.parse(urlStr);
-      final response = await http.get(url);
-
-      if (response.statusCode == 200) {
-        final Map<String, dynamic> data = jsonDecode(
-          utf8.decode(response.bodyBytes),
-        );
-        final List features = data['features'] ?? [];
-
-        if (features.isNotEmpty) {
-          final List<AddressSuggestion> suggestions = [];
-
-          for (var f in features) {
-            final props = f['properties'] as Map<String, dynamic>;
-            final geometry = f['geometry'] as Map<String, dynamic>;
-            final List coords = geometry['coordinates'];
-
-            final String name = props['name']?.toString() ?? '';
-            final String street = props['street']?.toString() ?? '';
-            final String house = props['housenumber']?.toString() ?? '';
-            final String district =
-                props['district']?.toString() ??
-                props['city']?.toString() ??
-                '';
-
-            String title = '';
-            if (street.isNotEmpty) {
-              title = house.isNotEmpty ? '$street, $house' : street;
-            } else if (name.isNotEmpty) {
-              title = house.isNotEmpty ? '$name, $house' : name;
-            } else if (district.isNotEmpty) {
-              title = district;
-            }
-
-            if (title.isNotEmpty) {
-              suggestions.add(
-                AddressSuggestion(
-                  displayName: title,
-                  lat: (coords[1] as num).toDouble(),
-                  lng: (coords[0] as num).toDouble(),
-                ),
-              );
-            }
-          }
-
-          if (suggestions.isNotEmpty) return suggestions;
-        }
-      }
-    } catch (e) {
-      debugPrint('Photon Search Exception: $e');
+      final rows = await _api(client)
+          .searchGeocoding(
+            query: clean,
+            kind: 'address',
+            settlement: useCityBias ? cityName : null,
+            lat: useCityBias ? cityLat : null,
+            lng: useCityBias ? cityLng : null,
+          )
+          .timeout(requestTimeout);
+      return rows
+          .where((row) {
+            final address = row['address'];
+            return address is! Map ||
+                address['country_code']?.toString().toLowerCase() == 'kz';
+          })
+          .map(_addressFromApi)
+          .whereType<AddressSuggestion>()
+          .toList();
+    } catch (error) {
+      debugPrint('Address search failed: $error');
+      return [];
     }
-
-    // Уровень 2: fallback на Nominatim, если Photon вернул 0 результатов
-    try {
-      final searchQuery = '$cleanQuery, $cityName';
-      final Uri nominatimUrl = Uri.parse(
-        'https://nominatim.openstreetmap.org/search?'
-        'q=${Uri.encodeComponent(searchQuery)}'
-        '&format=json'
-        '&addressdetails=1'
-        '&limit=6'
-        '&accept-language=ru',
-      );
-
-      final response = await http.get(
-        nominatimUrl,
-        headers: {'User-Agent': 'TulparTaxiApp/1.0 (kz.tulpar.app@gmail.com)'},
-      );
-
-      if (response.statusCode == 200) {
-        final List data = jsonDecode(utf8.decode(response.bodyBytes));
-        return data.map((item) {
-          final address = item['address'] as Map<String, dynamic>?;
-          String title = item['display_name'] ?? '';
-
-          if (address != null) {
-            final road =
-                address['road'] ??
-                address['pedestrian'] ??
-                address['building'] ??
-                '';
-            final house = address['house_number'] ?? '';
-            if (road.toString().isNotEmpty) {
-              title = house.toString().isNotEmpty ? '$road, $house' : '$road';
-            }
-          }
-
-          return AddressSuggestion(
-            displayName: title,
-            lat: double.parse(item['lat'].toString()),
-            lng: double.parse(item['lon'].toString()),
-          );
-        }).toList();
-      }
-    } catch (e) {
-      debugPrint('Nominatim Search Exception: $e');
-    }
-
-    return [];
   }
 
-  // 2. Обратное геокодирование (клик на карте -> адрес)
-  static Future<String> reverseGeocode(double lat, double lng) async {
-    try {
-      final Uri photonUrl = Uri.parse(
-        'https://photon.komoot.io/reverse?lat=$lat&lon=$lng&lang=ru',
-      );
-      final response = await http.get(photonUrl);
-
-      if (response.statusCode == 200) {
-        final Map<String, dynamic> data = jsonDecode(
-          utf8.decode(response.bodyBytes),
-        );
-        final List features = data['features'] ?? [];
-
-        if (features.isNotEmpty) {
-          final props = features.first['properties'] as Map<String, dynamic>;
-
-          final String name = props['name']?.toString() ?? '';
-          final String street = props['street']?.toString() ?? '';
-          final String house = props['housenumber']?.toString() ?? '';
-          final String district =
-              props['district']?.toString() ??
-              props['suburb']?.toString() ??
-              props['city']?.toString() ??
-              '';
-
-          if (street.isNotEmpty && house.isNotEmpty) return '$street, $house';
-          if (street.isNotEmpty) return street;
-          if (name.isNotEmpty && house.isNotEmpty) return '$name, $house';
-          if (name.isNotEmpty) return name;
-          if (district.isNotEmpty) return district;
-        }
-      }
-    } catch (e) {
-      debugPrint('Photon Reverse Exception: $e');
-    }
-
-    try {
-      final Uri nominatimUrl = Uri.parse(
-        'https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=json&addressdetails=1&accept-language=ru',
-      );
-      final response = await http.get(
-        nominatimUrl,
-        headers: {'User-Agent': 'TulparTaxiApp/1.0 (kz.tulpar.app@gmail.com)'},
-      );
-
-      if (response.statusCode == 200) {
-        final data =
-            jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
-        final address = data['address'] as Map<String, dynamic>?;
-
-        if (address != null) {
-          final road =
-              address['road'] ??
-              address['pedestrian'] ??
-              address['building'] ??
-              address['amenity'] ??
-              address['suburb'] ??
-              '';
-          final houseNumber = address['house_number'] ?? '';
-
-          if (road.toString().isNotEmpty) {
-            return houseNumber.toString().isNotEmpty
-                ? '$road, $houseNumber'
-                : '$road';
-          }
-        }
-
-        if (data['display_name'] != null) {
-          final parts = (data['display_name'] as String).split(',');
-          if (parts.length >= 2) {
-            return '${parts[0].trim()}, ${parts[1].trim()}';
-          }
-          return parts[0].trim();
-        }
-      }
-    } catch (e) {
-      debugPrint('Nominatim Reverse Exception: $e');
-    }
-
-    return 'Точка на карте (${lat.toStringAsFixed(3)}, ${lng.toStringAsFixed(3)})';
+  static Future<String> reverseGeocode(
+    double lat,
+    double lng, {
+    http.Client? client,
+  }) async {
+    final data = await _api(
+      client,
+    ).reverseGeocoding(lat: lat, lng: lng).timeout(requestTimeout);
+    return AddressSuggestion.shortAddressFromDisplayName(
+      data['address']?.toString() ?? '',
+    );
   }
+
+  static KazakhstanSettlement? _settlementFromApi(Object? raw) {
+    if (raw is! Map) return null;
+    final data = Map<String, dynamic>.from(raw);
+    final lat = _number(data['lat']);
+    final lng = _number(data['lng']);
+    final name = data['name']?.toString().trim() ?? '';
+    if (lat == null || lng == null || name.isEmpty) return null;
+    return KazakhstanSettlement(
+      id: data['id']?.toString() ?? '$lat,$lng',
+      name: name,
+      region: data['region']?.toString() ?? '',
+      lat: lat,
+      lng: lng,
+    );
+  }
+
+  static AddressSuggestion? _addressFromApi(Map<String, dynamic> data) {
+    final lat = _number(data['lat']);
+    final lng = _number(data['lng']);
+    final display = data['displayName']?.toString().trim() ?? '';
+    if (lat == null || lng == null || display.isEmpty) return null;
+    final raw = data['address'];
+    final address = raw is Map ? raw : const {};
+    return AddressSuggestion(
+      displayName: display,
+      lat: lat,
+      lng: lng,
+      road: AddressSuggestion.streetFromAddressComponents(address),
+      houseNumber: address['house_number']?.toString(),
+      locality: (address['city'] ?? address['town'] ?? address['village'])
+          ?.toString(),
+    );
+  }
+
+  static double? _number(Object? value) => value is num
+      ? value.toDouble()
+      : double.tryParse(value?.toString() ?? '');
+
+  static bool _matchesSettlement(Map address, String expected) => [
+    address['city'],
+    address['town'],
+    address['village'],
+    address['municipality'],
+    address['city_district'],
+    address['county'],
+  ].whereType<Object>().any((value) => _namesMatch(value.toString(), expected));
+
+  static bool _namesMatch(String left, String right) {
+    final a = _normalizeName(left);
+    final b = _normalizeName(right);
+    return a.contains(b) || b.contains(a);
+  }
+
+  static bool settlementNamesMatch(String left, String right) =>
+      _namesMatch(left, right);
+  static String _normalizeName(String value) => value
+      .toLowerCase()
+      .replaceAll('ё', 'е')
+      .replaceAll(RegExp(r'[^a-zа-я0-9]'), '');
 }

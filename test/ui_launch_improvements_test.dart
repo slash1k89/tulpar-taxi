@@ -88,6 +88,7 @@ void main() {
     );
     expect(phoneField.readOnly, isTrue);
     expect(find.text('+7 700 000-00-00'), findsOneWidget);
+    expect(find.byKey(const Key('profile_car_field')), findsNothing);
 
     await tester.enterText(
       find.byKey(const Key('profile_name_field')),
@@ -98,7 +99,7 @@ void main() {
 
     expect(repository.updatedUserId, 'user-1');
     expect(repository.updatedName, 'РќРѕРІРѕРµ РёРјСЏ');
-    expect(repository.updatedCarModel, 'Toyota Camry');
+    expect(repository.updatedCarModel, isEmpty);
     expect(repository.updateCalls, 1);
   });
 
