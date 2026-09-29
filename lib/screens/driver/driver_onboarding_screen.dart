@@ -8,6 +8,7 @@ import '../../widgets/app_drawer.dart';
 import 'driver_agreement_screen.dart';
 import 'driver_screen.dart';
 import '../../services/app_identity_service.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 class DriverOnboardingScreen extends StatefulWidget {
   const DriverOnboardingScreen({
@@ -55,9 +56,8 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
     }
     try {
       if (_userId.isEmpty) {
-        throw const DriverProfileException(
-          'Войдите в аккаунт, чтобы включить режим водителя.',
-        );
+        _loadError = 'login_required';
+        return;
       }
       final profile = await _repository.load(_userId);
       if (!mounted) return;
@@ -68,13 +68,13 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
         _carNumberController.text = profile.carNumber;
       }
     } on TimeoutException {
-      _loadError = 'Сервер не ответил. Проверьте интернет и повторите попытку.';
+      _loadError = 'timeout';
     } on FirebaseException catch (error) {
-      _loadError = _messageForFirebaseError(error);
-    } on DriverProfileException catch (error) {
-      _loadError = error.message;
+      _loadError = 'firebase:${error.code}';
+    } on DriverProfileException {
+      _loadError = 'load_failed';
     } catch (_) {
-      _loadError = 'Не удалось загрузить профиль водителя.';
+      _loadError = 'load_failed';
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -97,16 +97,16 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
       if (!mounted) return;
       setState(() => _profile = profile);
       if (profile.status == DriverProfileStatus.approved) {
-        _showMessage('Профиль водителя активирован');
+        _showMessage(AppLocalizations.of(context).onboardingActivated);
       }
     } on TimeoutException {
-      _showMessage('Сервер не ответил. Попробуйте ещё раз.');
+      _showMessage(AppLocalizations.of(context).onboardingRetryTimeout);
     } on FirebaseException catch (error) {
       _showMessage(_messageForFirebaseError(error));
-    } on DriverProfileException catch (error) {
-      _showMessage(error.message);
+    } on DriverProfileException {
+      _showMessage(AppLocalizations.of(context).onboardingSubmitFailed);
     } catch (_) {
-      _showMessage('Не удалось отправить заявку водителя.');
+      _showMessage(AppLocalizations.of(context).onboardingSubmitFailed);
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -120,11 +120,11 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
   }
 
   String _messageForFirebaseError(FirebaseException error) {
+    final l10n = AppLocalizations.of(context);
     return switch (error.code) {
-      'permission-denied' =>
-        'Недостаточно прав для изменения водительского профиля.',
-      'unavailable' => 'Сервис временно недоступен. Проверьте интернет.',
-      _ => 'Ошибка Firebase: ${error.code}. Попробуйте ещё раз.',
+      'permission-denied' => l10n.onboardingPermissionDenied,
+      'unavailable' => l10n.onboardingUnavailable,
+      _ => l10n.onboardingFirebaseError(error.code),
     };
   }
 
@@ -155,22 +155,18 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
       DriverOnboardingStep.vehicle => _buildVehicleForm(),
       DriverOnboardingStep.pending => _buildStatusScreen(
         icon: Icons.hourglass_top,
-        title: 'Заявка водителя отправлена на проверку.',
-        description:
-            'После одобрения режим водителя станет доступен автоматически. '
-            'Соглашение и данные автомобиля повторно заполнять не нужно.',
-        actionLabel: 'Проверить статус',
+        title: AppLocalizations.of(context).onboardingPendingTitle,
+        description: AppLocalizations.of(context).onboardingPendingBody,
+        actionLabel: AppLocalizations.of(context).onboardingCheckStatus,
         onAction: _loadProfile,
       ),
       DriverOnboardingStep.approved =>
         widget.driverDestinationBuilder?.call(context) ?? const DriverScreen(),
       DriverOnboardingStep.suspended => _buildStatusScreen(
         icon: Icons.block,
-        title: 'Доступ водителя приостановлен.',
-        description:
-            'Вы пока не можете принимать заказы. Для уточнения причины '
-            'обратитесь к администратору Tulpar.',
-        actionLabel: 'Проверить снова',
+        title: AppLocalizations.of(context).onboardingSuspendedTitle,
+        description: AppLocalizations.of(context).onboardingSuspendedBody,
+        actionLabel: AppLocalizations.of(context).onboardingCheckAgain,
         onAction: _loadProfile,
       ),
     };
@@ -179,7 +175,9 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
   Widget _buildError() {
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
-      appBar: AppBar(title: const Text('Режим водителя')),
+      appBar: AppBar(
+        title: Text(AppLocalizations.of(context).onboardingDriverMode),
+      ),
       drawer: const AppDrawer(mode: AppMode.driver),
       body: Center(
         child: Padding(
@@ -190,14 +188,28 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
               const Icon(Icons.error_outline, color: Colors.orange, size: 54),
               const SizedBox(height: 16),
               Text(
-                _loadError!,
+                switch (_loadError!) {
+                  'login_required' => AppLocalizations.of(
+                    context,
+                  ).onboardingLoginRequired,
+                  'timeout' => AppLocalizations.of(
+                    context,
+                  ).onboardingServerTimeout,
+                  'firebase:permission-denied' => AppLocalizations.of(
+                    context,
+                  ).onboardingPermissionDenied,
+                  'firebase:unavailable' => AppLocalizations.of(
+                    context,
+                  ).onboardingUnavailable,
+                  _ => AppLocalizations.of(context).onboardingLoadFailed,
+                },
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.white70, fontSize: 16),
               ),
               const SizedBox(height: 20),
               ElevatedButton(
                 onPressed: _loadProfile,
-                child: const Text('Повторить'),
+                child: Text(AppLocalizations.of(context).retry),
               ),
             ],
           ),
@@ -209,7 +221,9 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
   Widget _buildVehicleForm() {
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
-      appBar: AppBar(title: const Text('Автомобиль водителя')),
+      appBar: AppBar(
+        title: Text(AppLocalizations.of(context).onboardingVehicleTitle),
+      ),
       drawer: const AppDrawer(mode: AppMode.driver),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
@@ -218,45 +232,50 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Заполните данные автомобиля',
-                style: TextStyle(
+              Text(
+                AppLocalizations.of(context).onboardingFillVehicle,
+                style: const TextStyle(
                   color: Colors.amber,
                   fontSize: 22,
                   fontWeight: FontWeight.bold,
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
-                'После отправки заявка перейдёт на проверку. Эти сведения '
-                'увидит пассажир только после принятия заказа.',
-                style: TextStyle(color: Colors.white70),
+              Text(
+                AppLocalizations.of(context).onboardingVehicleHint,
+                style: const TextStyle(color: Colors.white70),
               ),
               const SizedBox(height: 24),
               _vehicleField(
                 key: const Key('driver_car_model_field'),
                 controller: _carModelController,
-                label: 'Марка и модель',
+                label: AppLocalizations.of(context).onboardingCarModel,
                 icon: Icons.directions_car,
-                emptyMessage: 'Укажите марку и модель автомобиля',
+                emptyMessage: AppLocalizations.of(
+                  context,
+                ).onboardingCarModelRequired,
                 maximumLength: 80,
               ),
               const SizedBox(height: 16),
               _vehicleField(
                 key: const Key('driver_car_color_field'),
                 controller: _carColorController,
-                label: 'Цвет кузова',
+                label: AppLocalizations.of(context).onboardingCarColor,
                 icon: Icons.color_lens,
-                emptyMessage: 'Укажите цвет автомобиля',
+                emptyMessage: AppLocalizations.of(
+                  context,
+                ).onboardingCarColorRequired,
                 maximumLength: 40,
               ),
               const SizedBox(height: 16),
               _vehicleField(
                 key: const Key('driver_car_number_field'),
                 controller: _carNumberController,
-                label: 'Государственный номер',
+                label: AppLocalizations.of(context).onboardingCarNumber,
                 icon: Icons.pin,
-                emptyMessage: 'Укажите государственный номер',
+                emptyMessage: AppLocalizations.of(
+                  context,
+                ).onboardingCarNumberRequired,
                 maximumLength: 20,
                 uppercase: true,
               ),
@@ -272,7 +291,7 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
                           dimension: 22,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Text('Отправить заявку на проверку'),
+                      : Text(AppLocalizations.of(context).onboardingSubmit),
                 ),
               ),
             ],
@@ -326,7 +345,9 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
   }) {
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
-      appBar: AppBar(title: const Text('Режим водителя')),
+      appBar: AppBar(
+        title: Text(AppLocalizations.of(context).onboardingDriverMode),
+      ),
       drawer: const AppDrawer(mode: AppMode.driver),
       body: Center(
         child: Padding(

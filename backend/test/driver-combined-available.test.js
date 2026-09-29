@@ -5,13 +5,16 @@ import request from 'supertest';
 import { createOrdersRouter } from '../src/routes/orders.js';
 
 // HTTP contract tests with a strict SQL stub; no production DB is contacted.
-function harness({ status = 'active', exempt = true, paid = false, authenticated = true } = {}) {
+function harness({ status = 'active', exempt = true, paid = false, authenticated = true, workCityId = 1, blocked = false } = {}) {
   const orders = ['city', 'delivery', 'intercity'].map((type) => ({
     id: type, service_type: type, status: 'searching', driver_id: null,
     passenger_id: 'passenger', passenger_price: 900,
     created_at: '2026-09-03T00:00:00Z', item_description: 'Parcel',
+    city_id: type === 'intercity' ? null : 1,
   }));
-  const driver = { id: 'driver', status, access_exempt: exempt, subscription_active: paid };
+  orders.push({ ...orders[0], id: 'rudny-order', city_id: 5 });
+  const driver = { id: 'driver', status, access_exempt: exempt,
+    subscription_active: paid, work_city_id: workCityId };
   const statements = [];
   const pool = {
     async query(sql, values = []) {
@@ -30,7 +33,12 @@ function harness({ status = 'active', exempt = true, paid = false, authenticated
         assert.match(q, /ORDER BY o\.created_at DESC/);
         assert.match(q, /o\.status = 'searching'/);
         assert.match(q, /st\.enabled = TRUE/);
-        return { rows: orders.filter((o) => values[0] == null || o.service_type === values[0]) };
+        return { rows: orders.filter((o) =>
+          (values[0] == null || o.service_type === values[0]) &&
+          (o.service_type === 'intercity' || o.city_id === values[1])) };
+      }
+      if (q.includes('FROM user_blocks')) {
+        return { rows: blocked ? [{}] : [], rowCount: blocked ? 1 : 0 };
       }
       if (q.startsWith('SELECT id FROM orders')) return { rows: [] };
       if (q.includes('FROM orders WHERE id = $1 FOR UPDATE')) return { rows: orders.filter((o) => o.id === values[0]) };
@@ -85,6 +93,20 @@ for (const status of [null, 'pending', 'suspended']) {
 test('unauthenticated rejected', async () => {
   await request(harness({ authenticated: false }).app).get('/api/orders/available').expect(401);
 });
-test('active driver without paid shift or exemption rejected', async () => {
-  await request(harness({ exempt: false }).app).get('/api/orders/available').expect(403);
+test('approved driver has free access without paid shift or exemption', async () => {
+  await request(harness({ exempt: false, paid: false }).app)
+    .get('/api/orders/available').expect(200);
+});
+test('blocked pair cannot accept a future order', async () => {
+  const response = await request(harness({ blocked: true }).app)
+    .post('/api/orders/city/accept').expect(403);
+  assert.equal(response.body.code, 'user_blocked');
+});
+
+test('driver cannot discover or accept an order from another city', async () => {
+  const { app } = harness();
+  const available = await request(app).get('/api/orders/available').expect(200);
+  assert.ok(!available.body.some((order) => order.id === 'rudny-order'));
+  const accept = await request(app).post('/api/orders/rudny-order/accept').expect(403);
+  assert.equal(accept.body.code, 'wrong_city');
 });

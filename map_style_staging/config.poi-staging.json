@@ -1,0 +1,21 @@
+{
+  "options": {
+    "paths": {
+      "root": "/data",
+      "styles": "styles",
+      "mbtiles": "data",
+      "fonts": "fonts"
+    },
+    "serveAllFonts": true
+  },
+  "styles": {
+    "tulpar-poi-staging": {
+      "style": "tulpar-poi-staging.json"
+    }
+  },
+  "data": {
+    "kazakhstan-shortbread-1.0": {
+      "mbtiles": "kazakhstan-shortbread-1.0.mbtiles"
+    }
+  }
+}

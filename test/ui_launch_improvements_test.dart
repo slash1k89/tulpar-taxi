@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 import 'package:taxi_esil/main.dart';
 import 'package:taxi_esil/screens/profile/profile_screen.dart';
 import 'package:taxi_esil/screens/splash_screen.dart';
@@ -71,6 +72,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ProfileScreen(
           repository: repository,
           themeController: themeController,
@@ -94,6 +97,16 @@ void main() {
       find.byKey(const Key('profile_name_field')),
       '  РќРѕРІРѕРµ РёРјСЏ  ',
     );
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('save_profile_button')),
+      300,
+      scrollable: find.descendant(
+        of: find.byType(ProfileScreen),
+        matching: find.byType(Scrollable),
+      ).first,
+    );
+    await tester.drag(find.byType(ListView).first, const Offset(0, -150));
+    await tester.pump();
     await tester.tap(find.byKey(const Key('save_profile_button')));
     await tester.pump();
 
@@ -110,6 +123,9 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           appBar: AppBar(title: const Text('РљР°СЂС‚Р°')),
           drawer: AppDrawer(
@@ -123,7 +139,7 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byTooltip('Open navigation menu'));
+    tester.state<ScaffoldState>(find.byType(Scaffold).first).openDrawer();
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('drawer_driver_mode_switch')), findsOneWidget);
 
@@ -139,6 +155,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: SplashScreen(
           initializeVideo: false,
           maximumDuration: const Duration(milliseconds: 50),
@@ -165,6 +183,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: SplashScreen(
           initializeVideo: false,
           startupLoader: () => loader.future,

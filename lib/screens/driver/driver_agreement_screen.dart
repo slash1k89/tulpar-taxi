@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/driver_agreement_service.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 class DriverAgreementScreen extends StatefulWidget {
   const DriverAgreementScreen({
@@ -44,8 +45,8 @@ class _DriverAgreementScreenState extends State<DriverAgreementScreen> {
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Не удалось сохранить согласие. Попробуйте ещё раз.'),
+          SnackBar(
+            content: Text(AppLocalizations.of(context).agreementSaveFailed),
           ),
         );
       }
@@ -57,7 +58,9 @@ class _DriverAgreementScreenState extends State<DriverAgreementScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Правила работы водителя')),
+      appBar: AppBar(
+        title: Text(AppLocalizations.of(context).agreementRulesTitle),
+      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(20),
@@ -65,21 +68,17 @@ class _DriverAgreementScreenState extends State<DriverAgreementScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'Соглашение версии ${DriverAgreementService.currentVersion}',
+                AppLocalizations.of(context).agreementVersion(
+                  DriverAgreementService.currentVersion.toString(),
+                ),
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 12),
-              const Expanded(
+              Expanded(
                 child: SingleChildScrollView(
                   child: Text(
-                    'Переходя в режим водителя, я подтверждаю, что:\n\n'
-                    '• имею право управлять автомобилем и использую технически исправный автомобиль;\n\n'
-                    '• соблюдаю правила дорожного движения и требования безопасности;\n\n'
-                    '• поддерживаю автомобиль в чистоте и вежливо общаюсь с пассажирами;\n\n'
-                    '• не выхожу на линию в состоянии, которое мешает безопасному управлению;\n\n'
-                    '• указываю достоверные сведения об автомобиле и не передаю аккаунт другим лицам;\n\n'
-                    '• использую данные пассажира только для выполнения заказа.',
-                    style: TextStyle(fontSize: 16, height: 1.35),
+                    AppLocalizations.of(context).agreementBody,
+                    style: const TextStyle(fontSize: 16, height: 1.35),
                   ),
                 ),
               ),
@@ -91,9 +90,7 @@ class _DriverAgreementScreenState extends State<DriverAgreementScreen> {
                     : (value) {
                         setState(() => _isConfirmed = value ?? false);
                       },
-                title: const Text(
-                  'Я прочитал(а) правила и принимаю соглашение',
-                ),
+                title: Text(AppLocalizations.of(context).agreementConfirm),
                 controlAffinity: ListTileControlAffinity.leading,
               ),
               const SizedBox(height: 8),
@@ -104,13 +101,15 @@ class _DriverAgreementScreenState extends State<DriverAgreementScreen> {
                         dimension: 22,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text('Принять и продолжить'),
+                    : Text(
+                        AppLocalizations.of(context).agreementAcceptContinue,
+                      ),
               ),
               TextButton(
                 onPressed: _isSaving
                     ? null
                     : () => Navigator.pop(context, false),
-                child: const Text('Отмена'),
+                child: Text(AppLocalizations.of(context).cancel),
               ),
             ],
           ),

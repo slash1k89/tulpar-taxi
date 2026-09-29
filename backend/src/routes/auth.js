@@ -2,6 +2,7 @@ import express from 'express';
 
 import { OtpChallengeError } from '../auth/otp-service.js';
 import { PhoneIdentityConflictError } from '../auth/phone-identity-service.js';
+import { PasswordAuthError } from '../auth/password-service.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -29,8 +30,25 @@ export function createAuthRouter({
   smsSender,
   authenticateAccessToken,
   verificationProvider,
+  passwordService,
 } = {}) {
   const router = express.Router();
+
+  router.post('/login', async (req, res) => {
+    if (!passwordService) return authError(res, 503, 'auth_unavailable', 'Authentication is temporarily unavailable');
+    try {
+      const userId = await passwordService.login(req.body?.phone, req.body?.password);
+      if (!userId) return authError(res, 401, 'invalid_credentials', 'Invalid phone or password');
+      const session = await sessionService.createSession(userId, requestMetadata(req));
+      return res.json({ ...session, userId });
+    } catch (error) {
+      if (error?.message === 'Invalid Kazakhstan phone number') {
+        return authError(res, 401, 'invalid_credentials', 'Invalid phone or password');
+      }
+      console.error('[PasswordLogin]', error);
+      return authError(res, 503, 'auth_unavailable', 'Authentication is temporarily unavailable');
+    }
+  });
 
   router.post('/otp/request', async (req, res) => {
     if (!otpService || !smsSender?.configured) {
@@ -108,6 +126,10 @@ export function createAuthRouter({
   });
 
   router.post('/verification/request', async (req, res) => {
+    const purpose = req.body?.purpose ?? 'login';
+    if (!['login', 'setup', 'reset'].includes(purpose)) {
+      return authError(res, 400, 'unsupported_purpose', 'Unsupported verification purpose');
+    }
     if (
       !otpService ||
       !verificationProvider?.configured ||
@@ -126,6 +148,7 @@ export function createAuthRouter({
           provider: verificationProvider.provider,
           requestCode: (phone) => verificationProvider.requestVerification(phone),
           metadata: requestMetadata(req),
+          purpose,
         },
       );
       const now = Date.now();
@@ -152,6 +175,10 @@ export function createAuthRouter({
   });
 
   router.post('/verification/verify', async (req, res) => {
+    const purpose = req.body?.purpose ?? 'login';
+    if (!['login', 'setup', 'reset'].includes(purpose)) {
+      return authError(res, 400, 'unsupported_purpose', 'Unsupported verification purpose');
+    }
     const challengeId = req.body?.challengeId;
     if (typeof challengeId !== 'string' || !UUID_PATTERN.test(challengeId)) {
       return authError(res, 400, 'invalid_request', 'Invalid authentication request');
@@ -161,8 +188,28 @@ export function createAuthRouter({
         challengeId,
         req.body?.phone,
         req.body?.code,
-        { method: 'flash_call' },
+        { method: 'flash_call', purpose },
       );
+      if (purpose !== 'login') {
+        if (!passwordService) return authError(res, 503, 'auth_unavailable', 'Authentication is temporarily unavailable');
+        const existing = await passwordService.findVerifiedIdentity(verified.phoneNormalized);
+        if (purpose === 'reset' && !existing) {
+          return authError(res, 401, 'invalid_verification', 'Invalid or expired verification code');
+        }
+        if (purpose === 'setup' && existing?.password_hash) {
+          return authError(res, 409, 'password_already_set', 'Password is already set');
+        }
+        const userId = purpose === 'reset'
+          ? existing.user_id
+          : (await identityService.resolveVerifiedPhone(verified.phoneNormalized)).userId;
+        const verificationToken = await passwordService.createVerificationContext({
+          challengeId,
+          userId,
+          phone: verified.phoneNormalized,
+          purpose,
+        });
+        return res.json({ verificationToken, purpose });
+      }
       const identity = await identityService.resolveVerifiedPhone(
         verified.phoneNormalized,
       );
@@ -188,6 +235,28 @@ export function createAuthRouter({
       return authError(res, 500, 'auth_failed', 'Authentication failed');
     }
   });
+
+  for (const purpose of ['setup', 'reset']) {
+    router.post(`/password/${purpose}`, async (req, res) => {
+      if (!passwordService) return authError(res, 503, 'auth_unavailable', 'Authentication is temporarily unavailable');
+      try {
+        const userId = await passwordService.setPassword({
+          verificationToken: req.body?.verificationToken,
+          password: req.body?.password,
+          purpose,
+        });
+        const session = await sessionService.createSession(userId, requestMetadata(req));
+        return res.json({ ...session, userId });
+      } catch (error) {
+        if (error instanceof PasswordAuthError) {
+          const status = error.code === 'password_already_set' ? 409 : 400;
+          return authError(res, status, error.code, 'Password could not be set');
+        }
+        console.error('[PasswordSetup]', error);
+        return authError(res, 503, 'auth_unavailable', 'Authentication is temporarily unavailable');
+      }
+    });
+  }
 
   router.post('/refresh', async (req, res) => {
     try {

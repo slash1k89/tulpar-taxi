@@ -3,8 +3,10 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../models/intercity_pickup_draft.dart';
+import '../../services/address_label_service.dart';
 import '../../widgets/tulpar_map_tile_layer.dart';
 import '../../widgets/tulpar_map_visuals.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 class IntercityPickupViewerScreen extends StatelessWidget {
   const IntercityPickupViewerScreen({
@@ -18,7 +20,9 @@ class IntercityPickupViewerScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Точка посадки')),
+    appBar: AppBar(
+      title: Text(AppLocalizations.of(context).intercityPickupPoint),
+    ),
     body: Stack(
       children: [
         FlutterMap(
@@ -61,7 +65,10 @@ class IntercityPickupViewerScreen extends StatelessWidget {
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        pickup.address,
+                        AddressLabelService.format(
+                          pickup.address,
+                          Localizations.localeOf(context),
+                        ),
                         key: const Key('intercity_pickup_viewer_address'),
                       ),
                     ),

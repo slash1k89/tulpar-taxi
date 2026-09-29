@@ -6,6 +6,7 @@ import '../../services/intercity_ride_service.dart';
 import '../../utils/intercity_ride_formatters.dart';
 import '../../widgets/app_drawer.dart';
 import 'intercity_driver_ride_details_screen.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 class IntercityDriverRidesScreen extends StatefulWidget {
   const IntercityDriverRidesScreen({super.key, this.repository});
@@ -62,7 +63,9 @@ class _IntercityDriverRidesScreenState
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Мои поездки')),
+    appBar: AppBar(
+      title: Text(AppLocalizations.of(context).driverIntercityMyRides),
+    ),
     drawer: const AppDrawer(
       mode: AppMode.driver,
       selectedServiceType: OrderServiceType.intercity,
@@ -71,6 +74,7 @@ class _IntercityDriverRidesScreenState
   );
 
   Widget _body() {
+    final l10n = AppLocalizations.of(context);
     if (_loading) {
       return const Center(
         key: Key('driver_rides_loading'),
@@ -83,17 +87,17 @@ class _IntercityDriverRidesScreenState
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Не удалось загрузить поездки'),
+            Text(l10n.intercityTripsLoadFailed),
             const SizedBox(height: 12),
-            ElevatedButton(onPressed: _load, child: const Text('Повторить')),
+            ElevatedButton(onPressed: _load, child: Text(l10n.retry)),
           ],
         ),
       );
     }
     if (_rides.isEmpty) {
-      return const Center(
-        key: Key('driver_rides_empty'),
-        child: Text('Вы ещё не публиковали поездки'),
+      return Center(
+        key: const Key('driver_rides_empty'),
+        child: Text(l10n.driverRidesEmpty),
       );
     }
     const statuses = [
@@ -113,7 +117,7 @@ class _IntercityDriverRidesScreenState
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: Text(
-                  intercityRideStatusGroup(status),
+                  intercityRideStatusGroup(status, l10n),
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
@@ -161,10 +165,18 @@ class DriverIntercityRideCard extends StatelessWidget {
             '${formatIntercityRideDate(ride.departureAt)}, '
             '${formatIntercityRideTime(ride.departureAt)}',
           ),
-          Text('${ride.totalSeats} мест всего'),
-          Text('Свободно: ${ride.availableSeats}'),
           Text(
-            '${formatTenge(ride.pricePerSeat)} / место',
+            AppLocalizations.of(context).driverRideTotalSeats(ride.totalSeats),
+          ),
+          Text(
+            AppLocalizations.of(
+              context,
+            ).intercityAvailableSeats(ride.availableSeats),
+          ),
+          Text(
+            AppLocalizations.of(
+              context,
+            ).intercityPerSeat(formatTenge(ride.pricePerSeat)),
             style: Theme.of(
               context,
             ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
@@ -175,7 +187,7 @@ class DriverIntercityRideCard extends StatelessWidget {
             child: OutlinedButton(
               key: Key('driver_ride_details_${ride.rideId}'),
               onPressed: onDetails,
-              child: const Text('Подробнее'),
+              child: Text(AppLocalizations.of(context).intercityDetails),
             ),
           ),
         ],
@@ -184,18 +196,24 @@ class DriverIntercityRideCard extends StatelessWidget {
   );
 }
 
-String intercityRideStatusLabel(IntercityRideStatus status) => switch (status) {
-  IntercityRideStatus.scheduled => 'Запланирована',
-  IntercityRideStatus.departed => 'В пути',
-  IntercityRideStatus.completed => 'Завершена',
-  IntercityRideStatus.cancelled => 'Отменена',
-  IntercityRideStatus.unknown => 'Статус неизвестен',
+String intercityRideStatusLabel(
+  IntercityRideStatus status,
+  AppLocalizations l10n,
+) => switch (status) {
+  IntercityRideStatus.scheduled => l10n.driverRideScheduled,
+  IntercityRideStatus.departed => l10n.driverRideDeparted,
+  IntercityRideStatus.completed => l10n.driverRideCompleted,
+  IntercityRideStatus.cancelled => l10n.driverRideCancelled,
+  IntercityRideStatus.unknown => l10n.driverRideUnknown,
 };
 
-String intercityRideStatusGroup(IntercityRideStatus status) => switch (status) {
-  IntercityRideStatus.scheduled => 'Предстоящие',
-  IntercityRideStatus.departed => 'В пути',
-  IntercityRideStatus.completed => 'Завершённые',
-  IntercityRideStatus.cancelled => 'Отменённые',
-  IntercityRideStatus.unknown => 'Другие',
+String intercityRideStatusGroup(
+  IntercityRideStatus status,
+  AppLocalizations l10n,
+) => switch (status) {
+  IntercityRideStatus.scheduled => l10n.bookingUpcoming,
+  IntercityRideStatus.departed => l10n.driverRideGroupDeparted,
+  IntercityRideStatus.completed => l10n.bookingCompleted,
+  IntercityRideStatus.cancelled => l10n.bookingCancelled,
+  IntercityRideStatus.unknown => l10n.bookingOther,
 };

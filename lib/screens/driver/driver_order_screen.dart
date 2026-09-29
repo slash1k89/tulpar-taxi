@@ -1,15 +1,28 @@
 import 'package:flutter/material.dart';
 
 import '../chat/chat_screen.dart';
+import '../../widgets/chat_unread_badge.dart';
+import '../../widgets/order_stops_view.dart';
 import '../../services/driver_tracking_service.dart';
 import '../../services/order_workflow_service.dart';
 import '../../services/tulpar_api_client.dart';
 import '../../widgets/delivery_details_view.dart';
+import '../../l10n/generated/app_localizations.dart';
+import '../../app_routes.dart';
+import '../../services/active_order_service.dart';
+import '../../widgets/city_order_cancellation_dialog.dart';
 
 class DriverOrderScreen extends StatefulWidget {
-  const DriverOrderScreen({super.key, required this.orderId});
+  const DriverOrderScreen({
+    super.key,
+    required this.orderId,
+    this.orderDetailsStream,
+    this.enableTracking = true,
+  });
 
   final String orderId;
+  final Stream<Map<String, dynamic>?>? orderDetailsStream;
+  final bool enableTracking;
 
   @override
   State<DriverOrderScreen> createState() => _DriverOrderScreenState();
@@ -17,6 +30,8 @@ class DriverOrderScreen extends StatefulWidget {
 
 class _DriverOrderScreenState extends State<DriverOrderScreen> {
   bool _isUpdating = false;
+  bool _isCancelling = false;
+  bool _handledRemoteCancellation = false;
 
   final DriverTrackingService _tracking = DriverTrackingService();
   final TulparApiClient _apiClient = TulparApiClient();
@@ -26,7 +41,7 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
   @override
   void initState() {
     super.initState();
-    _startTracking();
+    if (widget.enableTracking) _startTracking();
   }
 
   Future<void> _startTracking() async {
@@ -39,7 +54,7 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
 
   @override
   void dispose() {
-    _tracking.stopLocationUpdates(widget.orderId);
+    if (widget.enableTracking) _tracking.stopLocationUpdates(widget.orderId);
     super.dispose();
   }
 
@@ -59,11 +74,13 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
       if (newStatus == 'completed') {
         await _tracking.stopLocationUpdates(widget.orderId);
       }
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('шибка обновления статуса: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(AppLocalizations.of(context).driverOrderUpdateFailed),
+          ),
+        );
       }
     } finally {
       if (mounted) {
@@ -74,10 +91,72 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
     }
   }
 
+  Future<void> _cancelCityOrder(String status) async {
+    if (_isCancelling) return;
+    final reason = status == 'in_progress'
+        ? await showCityCancellationDialog(context, isDriver: true)
+        : null;
+    if (status == 'in_progress' && reason == null) return;
+    if (!mounted) return;
+    if (status != 'in_progress') {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(AppLocalizations.of(dialogContext).cancelOrderTitle),
+          content: Text(AppLocalizations.of(dialogContext).confirmCancelOrder),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: Text(AppLocalizations.of(dialogContext).no),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(AppLocalizations.of(dialogContext).yesCancel),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    setState(() => _isCancelling = true);
+    try {
+      await OrderWorkflowService().cancelOrder(
+        widget.orderId,
+        reasonCode: reason?.code,
+        reasonText: reason?.text,
+      );
+      await _tracking.stopLocationUpdates(widget.orderId);
+      ActiveOrderService.clearRememberedOrder();
+      if (!mounted) return;
+      Navigator.of(
+        context,
+      ).pushNamedAndRemoveUntil(AppRoutes.driverTaxi, (_) => false);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(AppLocalizations.of(context).cancelOrderFailed),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isCancelling = false);
+    }
+  }
+
+  void _returnAfterRemoteCancellation() {
+    if (!mounted) return;
+    Navigator.of(
+      context,
+    ).pushNamedAndRemoveUntil(AppRoutes.driverTaxi, (_) => false);
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<Map<String, dynamic>?>(
-      stream: _apiClient.watchOrderDetails(widget.orderId),
+      stream:
+          widget.orderDetailsStream ??
+          _apiClient.watchOrderDetails(widget.orderId),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting &&
             !snapshot.hasData) {
@@ -91,7 +170,7 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
           return Scaffold(
             backgroundColor: const Color(0xFF121212),
             appBar: AppBar(
-              title: const Text('аказ'),
+              title: Text(AppLocalizations.of(context).yourOrder),
               backgroundColor: const Color(0xFF1E1E1E),
               foregroundColor: Colors.amber,
             ),
@@ -99,7 +178,7 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
               child: Padding(
                 padding: const EdgeInsets.all(24),
                 child: Text(
-                  'е удалось загрузить заказ.\n${snapshot.error}',
+                  AppLocalizations.of(context).orderLoadFailed,
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: Colors.white70),
                 ),
@@ -111,59 +190,59 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
         final data = snapshot.data;
 
         if (data == null || data.isEmpty) {
-          return const Scaffold(
+          return Scaffold(
             backgroundColor: Color(0xFF121212),
             body: Center(
               child: Text(
-                'аказ не найден',
-                style: TextStyle(color: Colors.white),
+                AppLocalizations.of(context).chatOrderNotFound,
+                style: const TextStyle(color: Colors.white),
               ),
             ),
           );
         }
 
         final status = data['status']?.toString() ?? 'accepted';
+        if (data['serviceType'] == 'city' &&
+            status == 'cancelled' &&
+            !_handledRemoteCancellation) {
+          _handledRemoteCancellation = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            await _tracking.stopLocationUpdates(widget.orderId);
+            ActiveOrderService.clearRememberedOrder();
+            _returnAfterRemoteCancellation();
+          });
+        }
 
-        String statusTitle = 'дем к клиенту';
-        String buttonText = 'а месте';
+        String statusTitle = AppLocalizations.of(context).driverOrderHeading;
+        String buttonText = AppLocalizations.of(context).driverOrderAtPickup;
         String nextStatus = 'arrived';
         Color buttonColor = Colors.amber;
         bool showStatusButton = true;
 
         if (status == 'arrived' || status == 'driver_arrived') {
-          statusTitle = 'жидание клиента';
-          buttonText = 'ачать поездку';
+          statusTitle = AppLocalizations.of(context).driverOrderWaiting;
+          buttonText = AppLocalizations.of(context).driverOrderStart;
           nextStatus = 'in_progress';
           buttonColor = Colors.green;
         } else if (status == 'in_progress') {
-          statusTitle = 'оездка в процессе';
-          buttonText = 'авершить поездку';
+          statusTitle = AppLocalizations.of(context).driverOrderInProgress;
+          buttonText = AppLocalizations.of(context).driverOrderFinish;
           nextStatus = 'completed';
           buttonColor = Colors.redAccent;
         } else if (status == 'completed') {
-          statusTitle = 'оездка завершена';
+          statusTitle = AppLocalizations.of(context).statusTripCompleted;
           showStatusButton = false;
         } else if (status == 'cancelled') {
-          statusTitle = 'аказ отменён';
+          statusTitle = AppLocalizations.of(context).orderCancelled;
           showStatusButton = false;
         } else if (status == 'searching') {
-          statusTitle = 'оиск водителя';
+          statusTitle = AppLocalizations.of(context).statusSearchingDriver;
           showStatusButton = false;
         }
 
         final passengerName = data['passengerName']?.toString().trim() ?? '';
 
         final passengerPhone = data['passengerPhone']?.toString().trim() ?? '';
-
-        final fromAddress =
-            (data['fromAddress'] ?? data['pickupAddress'])?.toString().trim() ??
-            '';
-
-        final toAddress =
-            (data['toAddress'] ?? data['destinationAddress'])
-                ?.toString()
-                .trim() ??
-            '';
 
         final price =
             data['price'] ?? data['agreedPrice'] ?? data['passengerPrice'] ?? 0;
@@ -177,16 +256,17 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
             automaticallyImplyLeading: false,
             actions: [
               IconButton(
-                icon: const Icon(Icons.chat),
+                icon: ChatUnreadBadge(orderId: widget.orderId),
                 onPressed: () {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (_) => ChatScreen(
                         orderId: widget.orderId,
+                        peerUserId: data['passengerId']?.toString(),
                         peerName: passengerName.isNotEmpty
                             ? passengerName
-                            : 'ассажир',
+                            : AppLocalizations.of(context).passenger,
                       ),
                     ),
                   );
@@ -218,7 +298,11 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'ассажир: ${passengerName.isNotEmpty ? passengerName : 'ассажир'}',
+                          AppLocalizations.of(context).driverRidePassengerName(
+                            passengerName.isNotEmpty
+                                ? passengerName
+                                : AppLocalizations.of(context).passenger,
+                          ),
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 18,
@@ -228,7 +312,9 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
                         if (passengerPhone.isNotEmpty) ...[
                           const SizedBox(height: 6),
                           Text(
-                            'Тел: $passengerPhone',
+                            AppLocalizations.of(
+                              context,
+                            ).bookingPhone(passengerPhone),
                             style: const TextStyle(
                               color: Colors.white70,
                               fontSize: 15,
@@ -236,59 +322,25 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
                           ),
                         ],
                         const Divider(color: Colors.white24, height: 24),
-                        Row(
-                          children: [
-                            const Icon(
-                              Icons.my_location,
-                              color: Colors.green,
-                              size: 20,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'ткуда: $fromAddress',
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            const Icon(
-                              Icons.location_on,
-                              color: Colors.red,
-                              size: 20,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'уда: $toAddress',
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ),
-                          ],
+                        OrderStopsView(
+                          orderData: data,
+                          textColor: Colors.white70,
                         ),
                         if (DeliveryDetailsView.isDelivery(data)) ...[
                           const Divider(color: Colors.white24, height: 24),
                           DeliveryDetailsView(
                             orderData: data,
                             enableRecipientCall: true,
+                            onDarkCard: true,
                           ),
                         ],
                         const Divider(color: Colors.white24, height: 24),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text(
-                              'Стоимость:',
-                              style: TextStyle(
+                            Text(
+                              AppLocalizations.of(context).driverOrderCost,
+                              style: const TextStyle(
                                 color: Colors.white70,
                                 fontSize: 16,
                               ),
@@ -339,6 +391,21 @@ class _DriverOrderScreenState extends State<DriverOrderScreen> {
                               ),
                             ),
                     ),
+                  ),
+                if (data['serviceType'] == 'city' &&
+                    const {
+                      'accepted',
+                      'driver_arriving',
+                      'driver_arrived',
+                      'arrived',
+                      'in_progress',
+                    }.contains(status))
+                  TextButton.icon(
+                    onPressed: _isCancelling
+                        ? null
+                        : () => _cancelCityOrder(status),
+                    icon: const Icon(Icons.cancel_outlined),
+                    label: Text(AppLocalizations.of(context).cancelOrder),
                   ),
               ],
             ),

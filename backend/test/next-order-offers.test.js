@@ -15,6 +15,7 @@ function harness({ current = true, distance = 200 } = {}) {
       id: 'current',
       status: 'in_progress',
       service_type: 'city',
+      city_id: 1,
       destination_lat: 0,
       destination_lng: 0,
       started_at: startedAt,
@@ -24,11 +25,12 @@ function harness({ current = true, distance = 200 } = {}) {
     targets: new Map(),
     offers: new Map(),
     queries: [],
+    pushes: [],
   };
   state.targets.set('target', {
     id: 'target', passenger_id: 'passenger', passenger_firebase_uid: 'passenger-uid',
     passenger_price: 1000, status: 'searching', driver_id: null,
-    service_type: 'city', pickup_lat: north(distance), pickup_lng: 0,
+    service_type: 'city', city_id: 1, pickup_lat: north(distance), pickup_lng: 0,
   });
 
   const execute = async (sql, values = []) => {
@@ -39,8 +41,12 @@ function harness({ current = true, distance = 200 } = {}) {
     if (query.startsWith('SELECT id, name, phone, account_status FROM users')) {
       return { rows: [{ id: 'driver', name: 'Driver', phone: '+70000000000', account_status: 'active' }], rowCount: 1 };
     }
+    if (query.startsWith('SELECT COALESCE(firebase_uid, id::text) AS identity_key FROM users WHERE id = $1')) {
+      return { rows: [{ identity_key: 'driver-uid' }] };
+    }
     if (query.includes('FROM users u JOIN driver_profiles dp') && query.includes('u.firebase_uid = $1')) {
-      return { rows: [{ id: 'driver', status: 'active', access_exempt: true, subscription_active: false }] };
+      return { rows: [{ id: 'driver', status: 'active', access_exempt: true,
+        subscription_active: false, work_city_id: 1 }] };
     }
     if (query.includes('AS passenger_firebase_uid')) {
       const target = state.targets.get(values[0]);
@@ -82,7 +88,8 @@ function harness({ current = true, distance = 200 } = {}) {
         ...offer,
         driver_name: 'Driver', driver_phone: '+70000000000', driver_rating: 5,
         driver_profile_status: 'active', access_exempt: true,
-        subscription_active: false, car_model: 'Car', car_color: 'Blue', car_number: 'A1',
+        subscription_active: false, work_city_id: 1,
+        car_model: 'Car', car_color: 'Blue', car_number: 'A1',
       }] : [] };
     }
     if (query.startsWith('SELECT id, status, destination_lat, destination_lng')) {
@@ -117,6 +124,7 @@ function harness({ current = true, distance = 200 } = {}) {
       }
       return { rows: [] };
     }
+    if (query.includes('FROM user_blocks')) return { rows: [], rowCount: 0 };
     throw new Error(`Unexpected query: ${query}`);
   };
 
@@ -126,7 +134,11 @@ function harness({ current = true, distance = 200 } = {}) {
   app.use('/api/orders', createOrdersRouter({
     pool,
     requireAuth(req, _res, next) { req.user = { uid: req.get('x-uid') ?? 'driver-uid' }; next(); },
-    sendToUser() {}, sendToAvailableDrivers() {}, async sendPushToUser() {},
+    sendToUser() {}, sendToAvailableDrivers() {},
+    async sendPushToUser(uid, payload) {
+      assert.ok(state.queries.includes('COMMIT'));
+      state.pushes.push({ uid, payload });
+    },
   }));
   return { app, state };
 }
@@ -146,6 +158,23 @@ test('valid next candidate creates pending offer without changing current', asyn
   assert.equal(response.body.status, 'pending');
   assert.equal(state.current.status, 'in_progress');
   assert.equal(state.targets.get('target').status, 'searching');
+});
+
+test('driver cannot create or accept an offer across work-city boundary', async () => {
+  const createHarness = harness({ distance: 200 });
+  createHarness.state.targets.get('target').city_id = 5;
+  const rejectedCreate = await createOffer(createHarness.app);
+  assert.equal(rejectedCreate.status, 403);
+  assert.equal(rejectedCreate.body.code, 'wrong_city');
+  assert.equal(createHarness.state.offers.size, 0);
+
+  const acceptHarness = harness({ distance: 200 });
+  assert.equal((await createOffer(acceptHarness.app)).status, 201);
+  acceptHarness.state.targets.get('target').city_id = 5;
+  const rejectedAccept = await acceptOffer(acceptHarness.app);
+  assert.equal(rejectedAccept.status, 409);
+  assert.equal(rejectedAccept.body.code, 'wrong_city');
+  assert.equal(acceptHarness.state.targets.get('target').status, 'searching');
 });
 
 test('next offer beyond 300m is rejected using current destination to target pickup', async () => {
@@ -207,6 +236,12 @@ test('normal free-driver offer remains normal accepted order', async () => {
   assert.equal(response.body.status, 'accepted');
   assert.equal(response.body.queuedAfterOrderId, null);
   assert.equal(state.targets.get('target').status, 'accepted');
+  assert.deepEqual(state.pushes, [{
+    uid: 'driver-uid',
+    payload: { data: { type: 'offer_accepted', orderId: 'target', serviceType: 'city' } },
+  }]);
+  assert.equal((await acceptOffer(app)).status, 409);
+  assert.equal(state.pushes.length, 1);
 });
 
 test('unauthorized passenger cannot accept another passenger offer', async () => {

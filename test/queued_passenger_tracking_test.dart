@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:taxi_esil/screens/map/order_tracking_screen.dart';
 import 'package:taxi_esil/services/active_order_service.dart';
 import 'package:taxi_esil/services/tulpar_api_client.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 const pickup = LatLng(51.95, 66.40);
 const destination = LatLng(51.97, 66.42);
@@ -69,6 +70,9 @@ Future<void> pumpTracking(
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      locale: const Locale('ru'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: OrderTrackingScreen(
         orderId: 'queued-order',
         initialOrderData: initialData,
@@ -99,8 +103,8 @@ void main() {
       find.text('После завершения водитель сразу направится к вам.'),
       findsOneWidget,
     );
-    expect(find.text('Откуда: Абая, 15'), findsOneWidget);
-    expect(find.text('Куда: Ауэзова, 22'), findsOneWidget);
+    expect(find.text('Абая, 15'), findsOneWidget);
+    expect(find.text('Ауэзова, 22'), findsOneWidget);
     expect(find.text('Стоимость: 1600 ₸'), findsOneWidget);
     expect(find.textContaining('Toyota Camry'), findsOneWidget);
     expect(find.textContaining('Ищем водителя'), findsNothing);

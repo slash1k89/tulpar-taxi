@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:latlong2/latlong.dart';
@@ -7,11 +8,15 @@ class NavigationCameraUpdate {
     required this.accepted,
     required this.headingDegrees,
     required this.didUpdateHeading,
+    required this.routeBearingDegrees,
+    required this.targetHeadingDegrees,
   });
 
   final bool accepted;
   final double? headingDegrees;
   final bool didUpdateHeading;
+  final double? routeBearingDegrees;
+  final double? targetHeadingDegrees;
 }
 
 class NavigationCameraController {
@@ -32,26 +37,39 @@ class NavigationCameraController {
   LatLng? _previousPosition;
   double? _headingDegrees;
   bool following = true;
+  bool _userSuspended = false;
   int _generation = 0;
 
   int beginCameraUpdate() => ++_generation;
   bool canApply(int generation) => following && generation == _generation;
   void suspendFollow() {
     following = false;
+    _userSuspended = true;
     _generation++;
   }
 
   void resumeFollow() {
     following = true;
+    _userSuspended = false;
     _generation++;
   }
 
   double? get headingDegrees => _headingDegrees;
+  bool get userSuspended => _userSuspended;
 
   void reset() {
     _generation++;
     _previousPosition = null;
     _headingDegrees = null;
+  }
+
+  /// Route/status rebuilds preserve an explicit user pan, but never turn an
+  /// already-following camera off.
+  void restoreAfterNavigationChange() {
+    _generation++;
+    _previousPosition = null;
+    _headingDegrees = null;
+    if (!_userSuspended) following = true;
   }
 
   NavigationCameraUpdate update({
@@ -60,6 +78,7 @@ class NavigationCameraController {
     double? reportedHeadingDegrees,
     double? speedMetersPerSecond,
     List<LatLng> routeAhead = const [],
+    bool snapToRoute = false,
   }) {
     final accurateEnough =
         accuracyMeters == null ||
@@ -71,6 +90,8 @@ class NavigationCameraController {
         accepted: false,
         headingDegrees: _headingDegrees,
         didUpdateHeading: false,
+        routeBearingDegrees: null,
+        targetHeadingDegrees: null,
       );
     }
 
@@ -122,6 +143,8 @@ class NavigationCameraController {
         accepted: true,
         headingDegrees: _headingDegrees,
         didUpdateHeading: false,
+        routeBearingDegrees: routeHeading,
+        targetHeadingDegrees: null,
       );
     }
 
@@ -132,9 +155,12 @@ class NavigationCameraController {
         accepted: true,
         headingDegrees: oldHeading,
         didUpdateHeading: false,
+        routeBearingDegrees: routeHeading,
+        targetHeadingDegrees: targetHeading,
       );
     }
-    _headingDegrees = oldHeading == null
+    _headingDegrees =
+        oldHeading == null || (snapToRoute && routeHeading != null)
         ? _normalize(targetHeading)
         : _normalize(
             oldHeading +
@@ -145,6 +171,8 @@ class NavigationCameraController {
       accepted: true,
       headingDegrees: _headingDegrees,
       didUpdateHeading: true,
+      routeBearingDegrees: routeHeading,
+      targetHeadingDegrees: targetHeading,
     );
   }
 
@@ -152,34 +180,44 @@ class NavigationCameraController {
       ((to - from + 540) % 360) - 180;
 
   // Input is already trimmed to monotonically confirmed route progress.
-  // A short, distance-capped look-ahead cannot select an old/opposite segment.
+  // Prefer the closest forward segment rather than the bearing from the old
+  // trim point: GPS may be tens of metres ahead of it immediately after a turn.
   double? bearingAlongRoute(LatLng position, List<LatLng> route) {
-    if (route.length < 2 ||
-        _distance.as(LengthUnit.Meter, position, route.first) > 50) {
-      return null;
-    }
-    var remaining = 12.0;
-    var travelled = 0.0;
-    var target = route.first;
-    for (var i = 1; i < route.length; i++) {
-      final start = route[i - 1];
-      final end = route[i];
-      final length = _distance.as(LengthUnit.Meter, start, end);
-      if (length < 0.01) continue;
-      final fraction = math.min(remaining / length, 1.0);
-      target = LatLng(
+    if (route.length < 2) return null;
+    double? bestDistance;
+    double? bestBearing;
+    var scannedMeters = 0.0;
+    for (var i = 0; i < route.length - 1; i++) {
+      final start = route[i];
+      final end = route[i + 1];
+      final segmentLength = _distance.as(LengthUnit.Meter, start, end);
+      if (segmentLength < 2) continue;
+      scannedMeters += segmentLength;
+      if (scannedMeters > 250 && bestBearing != null) break;
+      final latScale = math.cos(position.latitude * math.pi / 180);
+      final dx = (end.longitude - start.longitude) * latScale;
+      final dy = end.latitude - start.latitude;
+      final denominator = dx * dx + dy * dy;
+      if (denominator <= 0) continue;
+      final fraction =
+          (((position.longitude - start.longitude) * latScale * dx +
+                      (position.latitude - start.latitude) * dy) /
+                  denominator)
+              .clamp(0.0, 1.0);
+      final nearest = LatLng(
         start.latitude + (end.latitude - start.latitude) * fraction,
         start.longitude + (end.longitude - start.longitude) * fraction,
       );
-      travelled += length * fraction;
-      remaining -= length * fraction;
-      if (remaining <= 0.01) break;
+      final distance = _distance.as(LengthUnit.Meter, position, nearest);
+      if (distance > 80 ||
+          (bestDistance != null && distance > bestDistance + 0.5)) {
+        continue;
+      }
+      // At a corner equal-distance candidates favour the newer segment.
+      bestDistance = distance;
+      bestBearing = _bearing(start, end);
     }
-    if (travelled < 2 ||
-        _distance.as(LengthUnit.Meter, route.first, target) < 2) {
-      return null;
-    }
-    return _bearing(route.first, target);
+    return bestBearing;
   }
 
   static double _normalize(double value) => (value % 360 + 360) % 360;
@@ -194,4 +232,33 @@ class NavigationCameraController {
         math.sin(fromLat) * math.cos(toLat) * math.cos(deltaLng);
     return _normalize(math.atan2(y, x) * 180 / math.pi);
   }
+}
+
+/// Re-enables camera follow only after the final user interaction is quiet.
+class NavigationFollowResumeTimer {
+  NavigationFollowResumeTimer({
+    required this.canResume,
+    required this.onResume,
+    this.delay = const Duration(milliseconds: 3500),
+  });
+
+  final bool Function() canResume;
+  final void Function() onResume;
+  final Duration delay;
+  Timer? _timer;
+
+  void cancel() {
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  void schedule() {
+    cancel();
+    _timer = Timer(delay, () {
+      _timer = null;
+      if (canResume()) onResume();
+    });
+  }
+
+  void dispose() => cancel();
 }

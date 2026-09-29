@@ -3,8 +3,13 @@ import 'package:flutter/material.dart';
 import '../../models/intercity_ride_booking.dart';
 import '../../models/order_service_type.dart';
 import '../../services/intercity_ride_service.dart';
+import '../../services/address_label_service.dart';
+import '../../services/intercity_contact_service.dart';
+import '../../widgets/chat_unread_badge.dart';
+import '../chat/chat_screen.dart';
 import '../../utils/intercity_ride_formatters.dart';
 import '../../widgets/app_drawer.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 class IntercityBookingsScreen extends StatefulWidget {
   const IntercityBookingsScreen({super.key, this.repository});
@@ -47,20 +52,21 @@ class _IntercityBookingsScreenState extends State<IntercityBookingsScreen> {
 
   Future<void> _cancel(IntercityRideBooking booking) async {
     if (_cancelling.contains(booking.bookingId)) return;
+    final l10n = AppLocalizations.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Отменить бронь?'),
-        content: const Text('Забронированные места снова станут доступными.'),
+        title: Text(l10n.bookingCancelTitle),
+        content: Text(l10n.bookingCancelExplanation),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Назад'),
+            child: Text(l10n.bookingBack),
           ),
           ElevatedButton(
             key: const Key('intercity_cancel_booking_confirm'),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Отменить бронь'),
+            child: Text(l10n.bookingCancel),
           ),
         ],
       ),
@@ -77,11 +83,9 @@ class _IntercityBookingsScreenState extends State<IntercityBookingsScreen> {
       });
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Не удалось отменить бронь. Попробуйте ещё раз.'),
-          ),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(l10n.bookingCancelFailed)));
       }
     } finally {
       if (mounted) setState(() => _cancelling.remove(booking.bookingId));
@@ -90,7 +94,9 @@ class _IntercityBookingsScreenState extends State<IntercityBookingsScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Мои бронирования')),
+    appBar: AppBar(
+      title: Text(AppLocalizations.of(context).intercityMyBookings),
+    ),
     drawer: const AppDrawer(
       mode: AppMode.passenger,
       selectedServiceType: OrderServiceType.intercity,
@@ -99,6 +105,7 @@ class _IntercityBookingsScreenState extends State<IntercityBookingsScreen> {
   );
 
   Widget _body() {
+    final l10n = AppLocalizations.of(context);
     if (_loading) {
       return const Center(
         key: Key('intercity_bookings_loading'),
@@ -111,17 +118,17 @@ class _IntercityBookingsScreenState extends State<IntercityBookingsScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Не удалось загрузить бронирования'),
+            Text(l10n.bookingLoadFailed),
             const SizedBox(height: 12),
-            ElevatedButton(onPressed: _load, child: const Text('Повторить')),
+            ElevatedButton(onPressed: _load, child: Text(l10n.retry)),
           ],
         ),
       );
     }
     if (_bookings.isEmpty) {
-      return const Center(
-        key: Key('intercity_bookings_empty'),
-        child: Text('У вас пока нет бронирований'),
+      return Center(
+        key: const Key('intercity_bookings_empty'),
+        child: Text(l10n.bookingEmpty),
       );
     }
     final groups = <IntercityRideBookingStatus, List<IntercityRideBooking>>{};
@@ -144,7 +151,7 @@ class _IntercityBookingsScreenState extends State<IntercityBookingsScreen> {
               Padding(
                 padding: const EdgeInsets.only(top: 8, bottom: 8),
                 child: Text(
-                  _statusTitle(status),
+                  _statusTitle(status, l10n),
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
@@ -177,6 +184,7 @@ class _BookingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final driver = booking.driver;
     final vehicle = [
       driver?.carModel,
@@ -201,18 +209,76 @@ class _BookingCard extends StatelessWidget {
               '${formatIntercityRideDate(booking.departureAt)}, '
               '${formatIntercityRideTime(booking.departureAt)}',
             ),
-            Text('${booking.seats} мест · ${formatTenge(booking.totalPrice)}'),
+            Text(
+              l10n.bookingSeatsAndPrice(
+                booking.seats,
+                formatTenge(booking.totalPrice),
+              ),
+            ),
             if (booking.pickupAddress?.isNotEmpty == true) ...[
               const SizedBox(height: 6),
-              Text('Точка посадки: ${booking.pickupAddress}'),
+              Text(
+                l10n.bookingPickup(
+                  AddressLabelService.format(
+                    booking.pickupAddress!,
+                    Localizations.localeOf(context),
+                  ),
+                ),
+              ),
             ],
             if (booking.passengerComment?.isNotEmpty == true)
-              Text('Комментарий водителю: ${booking.passengerComment}'),
+              Text(l10n.bookingComment(booking.passengerComment!)),
             if (booking.status == IntercityRideBookingStatus.confirmed &&
                 driver != null) ...[
-              if (driver.name != null) Text('Водитель: ${driver.name}'),
+              if (driver.name != null) Text(l10n.bookingDriver(driver.name!)),
               if (vehicle.isNotEmpty) Text(vehicle),
-              if (driver.phone != null) Text('Телефон: ${driver.phone}'),
+              if (driver.phone != null) Text(l10n.bookingPhone(driver.phone!)),
+            ],
+            if (booking.chatAvailable && driver != null) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                children: [
+                  TextButton.icon(
+                    key: Key('intercity_booking_chat_${booking.bookingId}'),
+                    onPressed: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ChatScreen(
+                          orderId: booking.bookingId,
+                          peerName: driver.name ?? l10n.driver,
+                          intercity: true,
+                        ),
+                      ),
+                    ),
+                    icon: ChatUnreadBadge(
+                      orderId: booking.bookingId,
+                      intercity: true,
+                    ),
+                    label: Text(l10n.intercityOpenChat),
+                  ),
+                  if (driver.phone != null)
+                    TextButton.icon(
+                      key: Key(
+                        'intercity_booking_whatsapp_${booking.bookingId}',
+                      ),
+                      onPressed: () async {
+                        final opened = await openIntercityWhatsApp(
+                          driver.phone,
+                        );
+                        if (!opened && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(l10n.intercityWhatsAppUnavailable),
+                            ),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.open_in_new),
+                      label: Text(l10n.intercityWhatsApp),
+                    ),
+                ],
+              ),
             ],
             if (booking.canCancel) ...[
               const SizedBox(height: 10),
@@ -224,7 +290,7 @@ class _BookingCard extends StatelessWidget {
                         dimension: 18,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text('Отменить бронь'),
+                    : Text(l10n.bookingCancel),
               ),
             ],
           ],
@@ -234,9 +300,10 @@ class _BookingCard extends StatelessWidget {
   }
 }
 
-String _statusTitle(IntercityRideBookingStatus status) => switch (status) {
-  IntercityRideBookingStatus.confirmed => 'Предстоящие',
-  IntercityRideBookingStatus.cancelled => 'Отменённые',
-  IntercityRideBookingStatus.completed => 'Завершённые',
-  IntercityRideBookingStatus.unknown => 'Другие',
-};
+String _statusTitle(IntercityRideBookingStatus status, AppLocalizations l10n) =>
+    switch (status) {
+      IntercityRideBookingStatus.confirmed => l10n.bookingUpcoming,
+      IntercityRideBookingStatus.cancelled => l10n.bookingCancelled,
+      IntercityRideBookingStatus.completed => l10n.bookingCompleted,
+      IntercityRideBookingStatus.unknown => l10n.bookingOther,
+    };

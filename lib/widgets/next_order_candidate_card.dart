@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../models/next_order.dart';
+import '../services/address_label_service.dart';
+import '../l10n/generated/app_localizations.dart';
 
 class NextOrderCandidateCard extends StatelessWidget {
   const NextOrderCandidateCard({
@@ -33,18 +35,28 @@ class NextOrderCandidateCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Следующий заказ рядом',
-              style: TextStyle(fontWeight: FontWeight.bold),
+            Text(
+              AppLocalizations.of(context).nextOrderNearby,
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 5),
             Text(
-              'Откуда: ${candidate.pickupAddress}',
+              AppLocalizations.of(context).fromAddress(
+                AddressLabelService.format(
+                  candidate.pickupAddress,
+                  Localizations.localeOf(context),
+                ),
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
             Text(
-              'Куда: ${candidate.destinationAddress}',
+              AppLocalizations.of(context).toAddress(
+                AddressLabelService.format(
+                  candidate.destinationAddress,
+                  Localizations.localeOf(context),
+                ),
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -60,7 +72,9 @@ class NextOrderCandidateCard extends StatelessWidget {
                 if (candidate.distanceToCurrentDestinationMeters > 0)
                   Flexible(
                     child: Text(
-                      'Подача в ${candidate.distanceToCurrentDestinationMeters} м',
+                      AppLocalizations.of(context).nextOrderDistance(
+                        candidate.distanceToCurrentDestinationMeters,
+                      ),
                       textAlign: TextAlign.end,
                       style: TextStyle(
                         fontSize: 12,
@@ -77,7 +91,7 @@ class NextOrderCandidateCard extends StatelessWidget {
                   child: OutlinedButton(
                     key: const Key('next_order_offer_button'),
                     onPressed: isAccepting ? null : onOffer,
-                    child: const Text('Своя цена'),
+                    child: Text(AppLocalizations.of(context).nextOrderOwnPrice),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -90,7 +104,7 @@ class NextOrderCandidateCard extends StatelessWidget {
                             dimension: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Text('Принять'),
+                        : Text(AppLocalizations.of(context).nextOrderAccept),
                   ),
                 ),
               ],

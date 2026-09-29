@@ -5,6 +5,10 @@ import '../models/order_service_type.dart';
 import '../services/app_identity_service.dart';
 import '../services/user_profile_service.dart';
 import '../utils/formatters.dart';
+import '../l10n/generated/app_localizations.dart';
+import '../services/passenger_operational_state_resolver.dart';
+import '../services/active_intercity_trip_service.dart';
+import '../screens/driver/active_intercity_trip_screen.dart';
 
 enum AppMode { passenger, driver }
 
@@ -18,6 +22,8 @@ class AppDrawer extends StatefulWidget {
     this.userLabel,
     this.phoneLoader,
     this.selectedServiceType,
+    this.operationalStateResolver,
+    this.activeIntercityTripResolver,
   });
 
   final AppMode mode;
@@ -25,6 +31,8 @@ class AppDrawer extends StatefulWidget {
   final String? userLabel;
   final Future<String?> Function()? phoneLoader;
   final OrderServiceType? selectedServiceType;
+  final PassengerOperationalStateResolver? operationalStateResolver;
+  final ActiveIntercityTripResolver? activeIntercityTripResolver;
 
   @override
   State<AppDrawer> createState() => _AppDrawerState();
@@ -33,12 +41,49 @@ class AppDrawer extends StatefulWidget {
 class _AppDrawerState extends State<AppDrawer> {
   bool _isChangingMode = false;
   String _userLabel = '';
+  late final ActiveIntercityTripResolver _activeIntercityResolver;
+  ActiveIntercityTripResolution? _activeIntercity;
 
   @override
   void initState() {
     super.initState();
+    _activeIntercityResolver =
+        widget.activeIntercityTripResolver ?? ActiveIntercityTripResolver();
     _userLabel = widget.userLabel?.trim() ?? '';
     if (widget.userLabel == null) _loadPhone();
+    if (widget.activeIntercityTripResolver != null ||
+        AppIdentityService().isAuthenticated) {
+      _loadActiveIntercityTrip();
+    }
+  }
+
+  Future<ActiveIntercityTripResolution> _loadActiveIntercityTrip() async {
+    final result = await _activeIntercityResolver.resolve();
+    if (mounted) setState(() => _activeIntercity = result);
+    return result;
+  }
+
+  void _showActiveTripUnknown() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(AppLocalizations.of(context).intercityActiveTripUnknown),
+      ),
+    );
+  }
+
+  void _openActiveIntercityTrip(
+    NavigatorState navigator,
+    ActiveIntercityTrip trip, {
+    bool clearStack = false,
+  }) {
+    final route = MaterialPageRoute<void>(
+      builder: (_) => ActiveIntercityTripScreen(trip: trip),
+    );
+    if (clearStack) {
+      navigator.pushAndRemoveUntil(route, (_) => false);
+    } else {
+      navigator.push(route);
+    }
   }
 
   Future<void> _loadPhone() async {
@@ -71,25 +116,30 @@ class _AppDrawerState extends State<AppDrawer> {
       }
 
       if (nextMode == AppMode.passenger) {
-        if (!mounted) return;
-        Navigator.pushNamedAndRemoveUntil(
-          context,
-          AppRoutes.map,
-          (route) => false,
-        );
+        await (widget.operationalStateResolver ??
+                PassengerOperationalStateResolver())
+            .openTaxi(context, clearStack: true);
         return;
       }
 
       if (!AppIdentityService().isAuthenticated) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
+            SnackBar(
               content: Text(
-                'Войдите в аккаунт, чтобы включить режим водителя.',
+                AppLocalizations.of(context).onboardingLoginRequired,
               ),
             ),
           );
         }
+        return;
+      }
+
+      final activeIntercity = await _loadActiveIntercityTrip();
+      if (!mounted) return;
+      if (activeIntercity.kind == ActiveIntercityTripResolutionKind.unknown &&
+          !activeIntercity.canResume) {
+        _showActiveTripUnknown();
         return;
       }
 
@@ -98,8 +148,12 @@ class _AppDrawerState extends State<AppDrawer> {
       final navigator = Navigator.of(context);
       setState(() => _isChangingMode = true);
       navigator.pop();
-
-      await navigator.pushNamed(AppRoutes.driverOnboarding);
+      final trip = activeIntercity.trip;
+      if (trip != null) {
+        _openActiveIntercityTrip(navigator, trip, clearStack: true);
+      } else {
+        await navigator.pushNamed(AppRoutes.driverOnboarding);
+      }
     } finally {
       if (mounted) setState(() => _isChangingMode = false);
     }
@@ -110,8 +164,29 @@ class _AppDrawerState extends State<AppDrawer> {
     Navigator.pushNamed(context, routeName, arguments: widget.mode);
   }
 
-  void _openServiceSection(String routeName) {
+  Future<void> _openServiceSection(String routeName) async {
     final navigator = Navigator.of(context);
+    if (widget.mode == AppMode.passenger && routeName == AppRoutes.map) {
+      await (widget.operationalStateResolver ??
+              PassengerOperationalStateResolver())
+          .openTaxi(context);
+      return;
+    }
+    if (widget.mode == AppMode.driver &&
+        routeName == AppRoutes.driverIntercity) {
+      final active = await _loadActiveIntercityTrip();
+      if (!mounted) return;
+      final trip = active.trip;
+      if (trip != null) {
+        navigator.pop();
+        _openActiveIntercityTrip(navigator, trip);
+        return;
+      }
+      if (active.kind == ActiveIntercityTripResolutionKind.unknown) {
+        _showActiveTripUnknown();
+        return;
+      }
+    }
     navigator.pop();
     navigator.pushReplacementNamed(routeName);
   }
@@ -137,7 +212,11 @@ class _AppDrawerState extends State<AppDrawer> {
         padding: EdgeInsets.zero,
         children: [
           UserAccountsDrawerHeader(
-            accountName: Text(isDriver ? 'Водитель' : 'Пассажир'),
+            accountName: Text(
+              isDriver
+                  ? AppLocalizations.of(context).driver
+                  : AppLocalizations.of(context).passenger,
+            ),
             accountEmail: Text(_userLabel, key: const Key('drawer_user_label')),
             currentAccountPicture: const CircleAvatar(
               backgroundColor: Colors.amber,
@@ -147,11 +226,15 @@ class _AppDrawerState extends State<AppDrawer> {
           ),
           SwitchListTile(
             key: const Key('drawer_driver_mode_switch'),
-            title: const Text(
-              'Режим водителя',
-              style: TextStyle(fontWeight: FontWeight.bold),
+            title: Text(
+              AppLocalizations.of(context).onboardingDriverMode,
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
-            subtitle: Text(isDriver ? 'Включен' : 'Выключен'),
+            subtitle: Text(
+              isDriver
+                  ? AppLocalizations.of(context).drawerEnabled
+                  : AppLocalizations.of(context).drawerDisabled,
+            ),
             secondary: Icon(
               Icons.local_taxi,
               color: isDriver ? Colors.amber : Colors.grey,
@@ -161,11 +244,26 @@ class _AppDrawerState extends State<AppDrawer> {
             onChanged: _isChangingMode ? null : _changeMode,
           ),
           const Divider(),
+          if (isDriver && _activeIntercity?.trip != null)
+            ListTile(
+              key: const Key('drawer_continue_intercity_trip'),
+              leading: const Icon(Icons.navigation, color: Colors.amber),
+              title: Text(
+                AppLocalizations.of(context).intercityContinueActiveTrip,
+              ),
+              onTap: () {
+                final trip = _activeIntercity?.trip;
+                if (trip == null) return;
+                final navigator = Navigator.of(context);
+                navigator.pop();
+                _openActiveIntercityTrip(navigator, trip);
+              },
+            ),
           if (isDriver) ...[
             _serviceTile(
               type: OrderServiceType.city,
               routeName: AppRoutes.driverTaxi,
-              title: 'Такси и доставка',
+              title: AppLocalizations.of(context).taxiAndDelivery,
             ),
             _serviceTile(
               type: OrderServiceType.intercity,
@@ -175,7 +273,7 @@ class _AppDrawerState extends State<AppDrawer> {
             _serviceTile(
               type: OrderServiceType.city,
               routeName: AppRoutes.map,
-              title: 'Заказать такси',
+              title: AppLocalizations.of(context).mapRequestTaxi,
             ),
             _serviceTile(
               type: OrderServiceType.delivery,
@@ -189,18 +287,21 @@ class _AppDrawerState extends State<AppDrawer> {
           const Divider(),
           ListTile(
             leading: const Icon(Icons.history),
-            title: const Text('История заказов'),
+            title: Text(AppLocalizations.of(context).drawerHistory),
             onTap: () => _openRoute(AppRoutes.history),
           ),
           ListTile(
             leading: const Icon(Icons.manage_accounts),
-            title: const Text('Профиль и настройки'),
+            title: Text(AppLocalizations.of(context).profileSettingsTitle),
             onTap: () => _openRoute(AppRoutes.profile),
           ),
           const Divider(),
           ListTile(
             leading: const Icon(Icons.exit_to_app, color: Colors.red),
-            title: const Text('Выйти', style: TextStyle(color: Colors.red)),
+            title: Text(
+              AppLocalizations.of(context).drawerSignOut,
+              style: const TextStyle(color: Colors.red),
+            ),
             onTap: _signOut,
           ),
         ],
@@ -217,7 +318,7 @@ class _AppDrawerState extends State<AppDrawer> {
     return ListTile(
       key: Key('drawer_service_${type.apiValue}'),
       leading: Icon(type.icon),
-      title: Text(title ?? type.title),
+      title: Text(title ?? type.localizedTitle(AppLocalizations.of(context))),
       subtitle: subtitle == null ? null : Text(subtitle),
       selected: widget.selectedServiceType == type,
       onTap: () => _openServiceSection(routeName),

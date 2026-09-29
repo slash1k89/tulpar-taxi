@@ -7,6 +7,7 @@ import 'package:taxi_esil/screens/driver/intercity_create_ride_screen.dart';
 import 'package:taxi_esil/screens/map/map_screen.dart';
 import 'package:taxi_esil/services/geocoding_service.dart';
 import 'package:taxi_esil/widgets/tulpar_time_picker.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 void main() {
   test('rounding never changes the selected calendar day', () {
@@ -20,7 +21,9 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      const MaterialApp(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: TulparTimePicker(initialTime: TimeOfDay(hour: 8, minute: 37)),
         ),
@@ -94,6 +97,8 @@ void main() {
     SharedPreferences.setMockInitialValues({'selected_city_id': 'esil'});
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: MapScreen(
           serviceType: OrderServiceType.intercity,
           locationProvider: () async => null,
@@ -114,6 +119,8 @@ void main() {
       (tester) async {
         await tester.pumpWidget(
           MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
             home: IntercityCreateRideScreen(
               initialOrigin: _origin,
               initialDestination: _destination,
@@ -138,6 +145,8 @@ Future<void> _pumpLauncher(
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: Scaffold(
         body: Builder(
           builder: (context) => ElevatedButton(

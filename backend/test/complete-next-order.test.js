@@ -6,7 +6,7 @@ import request from 'supertest';
 
 import { createOrdersRouter } from '../src/routes/orders.js';
 
-function harness({ queued = null, pushFails = false, activationFails = false } = {}) {
+function harness({ queued = null, pushFails = false, activationFails = false, pendingStops = 0 } = {}) {
   const current = {
     id: 'current', driver_id: 'driver', service_type: 'city',
     status: 'in_progress', agreed_price: 1000, completed_at: null,
@@ -49,6 +49,9 @@ function harness({ queued = null, pushFails = false, activationFails = false } =
       return { rows: [] };
     }
     if (query.startsWith('SELECT pg_advisory_xact_lock')) return { rows: [{}] };
+    if (query.startsWith('SELECT sequence FROM order_stops')) {
+      return { rows: Array.from({ length: pendingStops }, (_, sequence) => ({ sequence })) };
+    }
     if (query.startsWith('SELECT id, name, phone, account_status FROM users')) {
       return { rows: [{ id: 'driver', name: 'Driver', phone: '+70000000000', account_status: 'active' }], rowCount: 1 };
     }
@@ -87,6 +90,9 @@ function harness({ queued = null, pushFails = false, activationFails = false } =
     ) {
       return { rows: [{ passenger_uid: 'passenger-uid', driver_uid: 'driver-uid' }] };
     }
+    if (query.includes('SELECT o.service_type') && query.includes('AS identity_key')) {
+      return { rows: [{ service_type: 'city', identity_key: 'passenger-uid' }] };
+    }
     throw new Error(`Unexpected query: ${query}`);
   };
 
@@ -117,6 +123,16 @@ test('complete without queued preserves normal completion and side effects', asy
   assert.equal(response.body.nextOrderId, null);
   assert.ok(state.current.completed_at instanceof Date);
   assert.ok(state.events.some((event) => event.endsWith(':completed')));
+  assert.ok(state.events.includes('push:passenger-uid:completed'));
+  assert.ok(state.events.indexOf('push:passenger-uid:completed') > state.events.indexOf('commit'));
+});
+
+test('driver cannot complete before all intermediate stops are reached', async () => {
+  const { app, state } = harness({ pendingStops: 2 });
+  const response = await request(app).post('/api/orders/current/complete');
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, 'Intermediate stops are not completed');
+  assert.equal(state.current.status, 'in_progress');
 });
 
 test('linked queued activates atomically and preserves driver and price', async () => {
@@ -176,6 +192,7 @@ test('repeat complete does not activate or push again', async () => {
   const { app, state } = harness({ queued: true });
   assert.equal((await request(app).post('/api/orders/current/complete')).status, 200);
   const pushCount = state.events.filter((event) => event.startsWith('push:')).length;
+  assert.equal(state.events.filter((event) => event === 'push:passenger-uid:completed').length, 1);
   assert.equal((await request(app).post('/api/orders/current/complete')).status, 409);
   assert.equal(state.events.filter((event) => event.startsWith('push:')).length, pushCount);
 });

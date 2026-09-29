@@ -18,6 +18,7 @@ function createHarness({ current = true, queued = false, orders = [] } = {}) {
       id: 'current-order',
       status: 'in_progress',
       service_type: 'city',
+      city_id: 1,
       destination_lat: 0,
       destination_lng: 0,
     } : null,
@@ -41,6 +42,7 @@ function createHarness({ current = true, queued = false, orders = [] } = {}) {
           driver_id: 'driver-1',
           driver_profile_status: 'active',
           access_exempt: true,
+          work_city_id: 1,
           subscription_active: false,
           current_order_id: state.current?.id ?? null,
           destination_lat: state.current?.destination_lat ?? null,
@@ -53,9 +55,10 @@ function createHarness({ current = true, queued = false, orders = [] } = {}) {
       assert.match(query, /candidate\.pickup_lat - \$1/);
       assert.match(query, /candidate\.pickup_lng - \$2/);
       assert.doesNotMatch(query, /driver_lat|driver_lng/);
-      const [destinationLat, destinationLng, driverId, maximum] = values;
+      const [destinationLat, destinationLng, driverId, maximum, cityId] = values;
       const rows = [...state.orders.values()]
         .filter((order) => order.service_type === 'city')
+        .filter((order) => order.city_id === cityId)
         .filter((order) => order.status === 'searching' && order.driver_id == null)
         .filter((order) => order.passenger_id !== driverId)
         .map((order) => ({
@@ -71,9 +74,9 @@ function createHarness({ current = true, queued = false, orders = [] } = {}) {
       return { rows };
     }
     if (query.includes('FROM users u JOIN driver_profiles dp') && query.includes('FOR UPDATE OF u')) {
-      return { rows: [{ id: 'driver-1', status: 'active', access_exempt: true, subscription_active: false }], rowCount: 1 };
+      return { rows: [{ id: 'driver-1', status: 'active', access_exempt: true, subscription_active: false, work_city_id: 1 }], rowCount: 1 };
     }
-    if (query.startsWith('SELECT id, destination_lat, destination_lng FROM orders')) {
+    if (query.startsWith('SELECT id, city_id, destination_lat, destination_lng FROM orders')) {
       return { rows: state.current ? [{ ...state.current }] : [], rowCount: state.current ? 1 : 0 };
     }
     if (query.startsWith('SELECT id FROM orders') && query.includes("status = 'queued'")) {
@@ -132,6 +135,7 @@ function orderAt(id, meters, serviceType = 'city') {
     driver_id: null,
     status: 'searching',
     service_type: serviceType,
+    city_id: serviceType === 'intercity' ? null : 1,
     passenger_price: 1500,
     pickup_address: `Pickup ${id}`,
     destination_address: `Destination ${id}`,

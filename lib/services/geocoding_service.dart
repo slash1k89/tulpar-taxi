@@ -71,6 +71,7 @@ class GeocodingService {
   static Future<List<AddressSuggestion>> searchKazakhstanAddress({
     required String query,
     required KazakhstanSettlement settlement,
+    String? cityId,
     String? viewBox,
     http.Client? client,
   }) async {
@@ -81,6 +82,7 @@ class GeocodingService {
           .searchGeocoding(
             query: clean,
             kind: 'address',
+            cityId: cityId,
             settlement: settlement.name,
             lat: settlement.lat,
             lng: settlement.lng,
@@ -109,6 +111,7 @@ class GeocodingService {
   }) => searchKazakhstanAddress(
     query: query,
     settlement: KazakhstanSettlement.fromCity(city),
+    cityId: city.id,
     client: client,
   );
 
@@ -233,6 +236,7 @@ class GeocodingService {
       houseNumber: address['house_number']?.toString(),
       locality: (address['city'] ?? address['town'] ?? address['village'])
           ?.toString(),
+      kind: data['kind']?.toString(),
     );
   }
 

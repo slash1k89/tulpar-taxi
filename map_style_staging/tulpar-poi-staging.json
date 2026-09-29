@@ -1,0 +1,1127 @@
+{
+    "version": 8,
+    "name": "Tulpar Map v5.1",
+    "glyphs": "https://maps.tulpartaxi.kz/fonts/{fontstack}/{range}.pbf",
+    "center": [
+        66.405,
+        51.955
+    ],
+    "zoom": 14,
+    "sources": {
+        "shortbread": {
+            "type": "vector",
+            "url": "mbtiles://kazakhstan-shortbread-1.0.mbtiles"
+        }
+    },
+    "layers": [
+        {
+            "id": "background",
+            "type": "background",
+            "paint": {
+                "background-color": "#E9ECEF"
+            }
+        },
+        {
+            "id": "land",
+            "type": "fill",
+            "source": "shortbread",
+            "source-layer": "land",
+            "paint": {
+                "fill-color": "#E4E8E3",
+                "fill-opacity": 0.88
+            }
+        },
+        {
+            "id": "water",
+            "type": "fill",
+            "source": "shortbread",
+            "source-layer": "water_polygons",
+            "paint": {
+                "fill-color": "#B8DDEA",
+                "fill-opacity": 0.9
+            }
+        },
+        {
+            "id": "water-lines",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "water_lines",
+            "paint": {
+                "line-color": "#9BCBDE",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    10,
+                    0.7,
+                    14,
+                    1.5,
+                    17,
+                    2.5
+                ]
+            }
+        },
+        {
+            "id": "buildings",
+            "type": "fill",
+            "source": "shortbread",
+            "source-layer": "buildings",
+            "minzoom": 13,
+            "paint": {
+                "fill-color": "#C3C9D0",
+                "fill-outline-color": "#A5ADB6",
+                "fill-opacity": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    13,
+                    0.74,
+                    15,
+                    0.92,
+                    17,
+                    1
+                ]
+            }
+        },
+        {
+            "id": "rail-casing",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "==",
+                [
+                    "get",
+                    "kind"
+                ],
+                "rail"
+            ],
+            "paint": {
+                "line-color": "#E3E6E9",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    10,
+                    2,
+                    14,
+                    3,
+                    17,
+                    5
+                ]
+            }
+        },
+        {
+            "id": "rail",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "==",
+                [
+                    "get",
+                    "kind"
+                ],
+                "rail"
+            ],
+            "paint": {
+                "line-color": "#666E77",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    10,
+                    1,
+                    14,
+                    1.5,
+                    17,
+                    2.2
+                ],
+                "line-dasharray": [
+                    2.4,
+                    1.8
+                ]
+            }
+        },
+        {
+            "id": "tracks",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "==",
+                [
+                    "get",
+                    "kind"
+                ],
+                "track"
+            ],
+            "minzoom": 14,
+            "paint": {
+                "line-color": "#A7A29A",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    14,
+                    0.8,
+                    17,
+                    2
+                ],
+                "line-dasharray": [
+                    2,
+                    2
+                ]
+            }
+        },
+        {
+            "id": "footways",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "match",
+                [
+                    "get",
+                    "kind"
+                ],
+                [
+                    "footway",
+                    "steps"
+                ],
+                true,
+                false
+            ],
+            "minzoom": 15,
+            "paint": {
+                "line-color": "#AEB4BA",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    15,
+                    0.7,
+                    18,
+                    1.8
+                ],
+                "line-dasharray": [
+                    1.5,
+                    1.5
+                ]
+            }
+        },
+        {
+            "id": "service-casing",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "==",
+                [
+                    "get",
+                    "kind"
+                ],
+                "service"
+            ],
+            "minzoom": 14,
+            "layout": {
+                "line-cap": "round",
+                "line-join": "round"
+            },
+            "paint": {
+                "line-color": "#ADB5BD",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    14,
+                    2,
+                    17,
+                    5.6
+                ]
+            }
+        },
+        {
+            "id": "service",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "==",
+                [
+                    "get",
+                    "kind"
+                ],
+                "service"
+            ],
+            "minzoom": 14,
+            "layout": {
+                "line-cap": "round",
+                "line-join": "round"
+            },
+            "paint": {
+                "line-color": "#F8F9FA",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    14,
+                    1,
+                    17,
+                    3.8
+                ]
+            }
+        },
+        {
+            "id": "local-road-casing",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "match",
+                [
+                    "get",
+                    "kind"
+                ],
+                [
+                    "residential",
+                    "unclassified"
+                ],
+                true,
+                false
+            ],
+            "minzoom": 12,
+            "layout": {
+                "line-cap": "round",
+                "line-join": "round"
+            },
+            "paint": {
+                "line-color": "#979FA8",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    12,
+                    1.9,
+                    14,
+                    4,
+                    16,
+                    7,
+                    18,
+                    12.4
+                ]
+            }
+        },
+        {
+            "id": "local-roads",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "match",
+                [
+                    "get",
+                    "kind"
+                ],
+                [
+                    "residential",
+                    "unclassified"
+                ],
+                true,
+                false
+            ],
+            "minzoom": 12,
+            "layout": {
+                "line-cap": "round",
+                "line-join": "round"
+            },
+            "paint": {
+                "line-color": "#FFFFFF",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    12,
+                    1.2,
+                    14,
+                    2.9,
+                    16,
+                    5.5,
+                    18,
+                    10.4
+                ]
+            }
+        },
+        {
+            "id": "tertiary-casing",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "==",
+                [
+                    "get",
+                    "kind"
+                ],
+                "tertiary"
+            ],
+            "minzoom": 10,
+            "layout": {
+                "line-cap": "round",
+                "line-join": "round"
+            },
+            "paint": {
+                "line-color": "#AD9C86",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    10,
+                    1.6,
+                    14,
+                    4.8,
+                    17,
+                    10
+                ]
+            }
+        },
+        {
+            "id": "tertiary",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "==",
+                [
+                    "get",
+                    "kind"
+                ],
+                "tertiary"
+            ],
+            "minzoom": 10,
+            "layout": {
+                "line-cap": "round",
+                "line-join": "round"
+            },
+            "paint": {
+                "line-color": "#FFEBCB",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    10,
+                    1,
+                    14,
+                    3.6,
+                    17,
+                    8
+                ]
+            }
+        },
+        {
+            "id": "secondary-casing",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "==",
+                [
+                    "get",
+                    "kind"
+                ],
+                "secondary"
+            ],
+            "minzoom": 8,
+            "layout": {
+                "line-cap": "round",
+                "line-join": "round"
+            },
+            "paint": {
+                "line-color": "#B98A56",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    8,
+                    1.8,
+                    12,
+                    3.4,
+                    14,
+                    5.8,
+                    17,
+                    12.5
+                ]
+            }
+        },
+        {
+            "id": "secondary",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "==",
+                [
+                    "get",
+                    "kind"
+                ],
+                "secondary"
+            ],
+            "minzoom": 8,
+            "layout": {
+                "line-cap": "round",
+                "line-join": "round"
+            },
+            "paint": {
+                "line-color": "#FFD18D",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    8,
+                    1.1,
+                    12,
+                    2.5,
+                    14,
+                    4.5,
+                    17,
+                    10
+                ]
+            }
+        },
+        {
+            "id": "trunk-casing",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "==",
+                [
+                    "get",
+                    "kind"
+                ],
+                "trunk"
+            ],
+            "minzoom": 6,
+            "layout": {
+                "line-cap": "round",
+                "line-join": "round"
+            },
+            "paint": {
+                "line-color": "#A8622F",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    6,
+                    2.2,
+                    10,
+                    3.4,
+                    14,
+                    7,
+                    17,
+                    14
+                ]
+            }
+        },
+        {
+            "id": "trunk",
+            "type": "line",
+            "source": "shortbread",
+            "source-layer": "streets",
+            "filter": [
+                "==",
+                [
+                    "get",
+                    "kind"
+                ],
+                "trunk"
+            ],
+            "minzoom": 6,
+            "layout": {
+                "line-cap": "round",
+                "line-join": "round"
+            },
+            "paint": {
+                "line-color": "#FFB85F",
+                "line-width": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    6,
+                    1.4,
+                    10,
+                    2.5,
+                    14,
+                    5.5,
+                    17,
+                    11.5
+                ]
+            }
+        },
+        {
+            "id": "street-labels",
+            "type": "symbol",
+            "source": "shortbread",
+            "source-layer": "street_labels",
+            "minzoom": 12,
+            "layout": {
+                "symbol-placement": "line",
+                "text-field": [
+                    "coalesce",
+                    [
+                        "get",
+                        "name"
+                    ],
+                    [
+                        "get",
+                        "name_en"
+                    ]
+                ],
+                "text-font": [
+                    "Noto Sans Regular"
+                ],
+                "text-size": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    12,
+                    11.5,
+                    14,
+                    13.5,
+                    16,
+                    15,
+                    18,
+                    16.5
+                ],
+                "text-letter-spacing": 0
+            },
+            "paint": {
+                "text-color": "#24292F",
+                "text-halo-color": "#FFFFFF",
+                "text-halo-width": 2.1,
+                "text-halo-blur": 0.25
+            }
+        },
+        {
+            "id": "transport-hubs",
+            "type": "symbol",
+            "source": "shortbread",
+            "source-layer": "public_transport",
+            "minzoom": 14,
+            "filter": [
+                "all",
+                [
+                    "has",
+                    "name"
+                ],
+                [
+                    "match",
+                    [
+                        "get",
+                        "kind"
+                    ],
+                    [
+                        "station",
+                        "bus_station",
+                        "ferry_terminal"
+                    ],
+                    true,
+                    false
+                ]
+            ],
+            "layout": {
+                "text-field": [
+                    "get",
+                    "name"
+                ],
+                "text-font": [
+                    "Noto Sans Regular"
+                ],
+                "text-size": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    14,
+                    12,
+                    17,
+                    13.5
+                ],
+                "text-padding": 8,
+                "text-variable-anchor": [
+                    "top",
+                    "bottom",
+                    "left",
+                    "right"
+                ],
+                "text-radial-offset": 0.45,
+                "text-max-width": 11,
+                "text-allow-overlap": false,
+                "text-ignore-placement": false,
+                "symbol-sort-key": 0
+            },
+            "paint": {
+                "text-color": "#334155",
+                "text-halo-color": "#FFFFFF",
+                "text-halo-width": 2,
+                "text-halo-blur": 0.2
+            }
+        },
+        {
+            "id": "poi-major",
+            "type": "symbol",
+            "source": "shortbread",
+            "source-layer": "pois",
+            "minzoom": 14,
+            "filter": [
+                "all",
+                [
+                    "has",
+                    "name"
+                ],
+                [
+                    "any",
+                    [
+                        "match",
+                        [
+                            "get",
+                            "amenity"
+                        ],
+                        [
+                            "hospital",
+                            "school",
+                            "college",
+                            "university",
+                            "townhall",
+                            "courthouse",
+                            "police",
+                            "fire_station",
+                            "fuel"
+                        ],
+                        true,
+                        false
+                    ],
+                    [
+                        "match",
+                        [
+                            "get",
+                            "shop"
+                        ],
+                        [
+                            "supermarket",
+                            "mall",
+                            "department_store"
+                        ],
+                        true,
+                        false
+                    ]
+                ]
+            ],
+            "layout": {
+                "text-field": [
+                    "get",
+                    "name"
+                ],
+                "text-font": [
+                    "Noto Sans Regular"
+                ],
+                "text-size": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    14,
+                    11,
+                    17,
+                    12.5
+                ],
+                "text-padding": 8,
+                "text-variable-anchor": [
+                    "top",
+                    "bottom",
+                    "left",
+                    "right"
+                ],
+                "text-radial-offset": 0.45,
+                "text-max-width": 10,
+                "text-allow-overlap": false,
+                "text-ignore-placement": false,
+                "symbol-sort-key": 10
+            },
+            "paint": {
+                "text-color": "#374151",
+                "text-halo-color": "#FFFFFF",
+                "text-halo-width": 1.8,
+                "text-halo-blur": 0.2
+            }
+        },
+        {
+            "id": "poi-medium",
+            "type": "symbol",
+            "source": "shortbread",
+            "source-layer": "pois",
+            "minzoom": 16,
+            "filter": [
+                "all",
+                [
+                    "has",
+                    "name"
+                ],
+                [
+                    "any",
+                    [
+                        "match",
+                        [
+                            "get",
+                            "amenity"
+                        ],
+                        [
+                            "pharmacy",
+                            "clinic",
+                            "doctors",
+                            "dentist",
+                            "bank",
+                            "atm",
+                            "cafe",
+                            "restaurant",
+                            "fast_food",
+                            "post_office"
+                        ],
+                        true,
+                        false
+                    ],
+                    [
+                        "match",
+                        [
+                            "get",
+                            "shop"
+                        ],
+                        [
+                            "chemist",
+                            "hardware",
+                            "doityourself",
+                            "car",
+                            "furniture",
+                            "sports"
+                        ],
+                        true,
+                        false
+                    ],
+                    [
+                        "match",
+                        [
+                            "get",
+                            "tourism"
+                        ],
+                        [
+                            "hotel"
+                        ],
+                        true,
+                        false
+                    ]
+                ]
+            ],
+            "layout": {
+                "text-field": [
+                    "get",
+                    "name"
+                ],
+                "text-font": [
+                    "Noto Sans Regular"
+                ],
+                "text-size": 11,
+                "text-padding": 10,
+                "text-variable-anchor": [
+                    "top",
+                    "bottom",
+                    "left",
+                    "right"
+                ],
+                "text-radial-offset": 0.4,
+                "text-max-width": 9,
+                "text-allow-overlap": false,
+                "text-ignore-placement": false,
+                "symbol-sort-key": 20
+            },
+            "paint": {
+                "text-color": "#4B5563",
+                "text-halo-color": "#FFFFFF",
+                "text-halo-width": 1.7,
+                "text-halo-blur": 0.2
+            }
+        },
+        {
+            "id": "poi-local",
+            "type": "symbol",
+            "source": "shortbread",
+            "source-layer": "pois",
+            "minzoom": 17,
+            "filter": [
+                "all",
+                [
+                    "has",
+                    "name"
+                ],
+                [
+                    "any",
+                    [
+                        "all",
+                        [
+                            "has",
+                            "shop"
+                        ],
+                        [
+                            "!",
+                            [
+                                "match",
+                                [
+                                    "get",
+                                    "shop"
+                                ],
+                                [
+                                    "supermarket",
+                                    "mall",
+                                    "department_store",
+                                    "chemist",
+                                    "hardware",
+                                    "doityourself",
+                                    "car",
+                                    "furniture",
+                                    "sports"
+                                ],
+                                true,
+                                false
+                            ]
+                        ]
+                    ],
+                    [
+                        "match",
+                        [
+                            "get",
+                            "amenity"
+                        ],
+                        [
+                            "bar",
+                            "pub",
+                            "nightclub",
+                            "car_wash",
+                            "community_centre",
+                            "marketplace"
+                        ],
+                        true,
+                        false
+                    ],
+                    [
+                        "match",
+                        [
+                            "get",
+                            "tourism"
+                        ],
+                        [
+                            "hostel",
+                            "guest_house"
+                        ],
+                        true,
+                        false
+                    ]
+                ]
+            ],
+            "layout": {
+                "text-field": [
+                    "get",
+                    "name"
+                ],
+                "text-font": [
+                    "Noto Sans Regular"
+                ],
+                "text-size": 10.5,
+                "text-padding": 12,
+                "text-variable-anchor": [
+                    "top",
+                    "bottom",
+                    "left",
+                    "right"
+                ],
+                "text-radial-offset": 0.35,
+                "text-max-width": 8,
+                "text-allow-overlap": false,
+                "text-ignore-placement": false,
+                "symbol-sort-key": 30
+            },
+            "paint": {
+                "text-color": "#5B6470",
+                "text-halo-color": "#FFFFFF",
+                "text-halo-width": 1.6,
+                "text-halo-blur": 0.2
+            }
+        },
+        {
+            "id": "house-numbers",
+            "type": "symbol",
+            "source": "shortbread",
+            "source-layer": "addresses",
+            "minzoom": 15,
+            "layout": {
+                "text-field": [
+                    "get",
+                    "housenumber"
+                ],
+                "text-font": [
+                    "Noto Sans Regular"
+                ],
+                "text-size": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    15,
+                    11,
+                    16,
+                    13,
+                    17,
+                    14.5,
+                    18,
+                    15.5
+                ],
+                "text-padding": 1,
+                "text-variable-anchor": [
+                    "center",
+                    "top",
+                    "bottom",
+                    "left",
+                    "right"
+                ],
+                "text-radial-offset": 0.25,
+                "text-ignore-placement": true
+            },
+            "paint": {
+                "text-color": "#30363D",
+                "text-halo-color": "#FFFFFF",
+                "text-halo-width": 1.8,
+                "text-halo-blur": 0.2
+            }
+        },
+        {
+            "id": "place-labels",
+            "type": "symbol",
+            "source": "shortbread",
+            "source-layer": "place_labels",
+            "layout": {
+                "text-field": [
+                    "coalesce",
+                    [
+                        "get",
+                        "name"
+                    ],
+                    [
+                        "get",
+                        "name_en"
+                    ]
+                ],
+                "text-font": [
+                    "Noto Sans Regular"
+                ],
+                "text-size": [
+                    "interpolate",
+                    [
+                        "linear"
+                    ],
+                    [
+                        "zoom"
+                    ],
+                    5,
+                    12,
+                    10,
+                    14.5,
+                    13,
+                    18.5,
+                    15,
+                    22.5
+                ]
+            },
+            "paint": {
+                "text-color": "#171A1F",
+                "text-halo-color": "#FFFFFF",
+                "text-halo-width": 2.6,
+                "text-halo-blur": 0.25
+            }
+        }
+    ]
+}

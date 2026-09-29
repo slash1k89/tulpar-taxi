@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
@@ -7,8 +9,9 @@ import '../../services/account_deletion_service.dart';
 import '../../app_routes.dart';
 import '../../widgets/app_drawer.dart';
 import '../../services/app_identity_service.dart';
-import '../../services/tulpar_auth_session.dart';
 import '../../services/voice_guidance_settings.dart';
+import '../../services/locale_controller.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({
@@ -77,7 +80,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (userId == null) {
       if (mounted) {
         setState(() {
-          _loadError = 'Пользователь не авторизован';
+          _loadError = 'not_authenticated';
           _isLoading = false;
         });
       }
@@ -97,7 +100,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _loadError = 'Не удалось загрузить профиль';
+        _loadError = 'load_failed';
         _isLoading = false;
       });
     }
@@ -118,8 +121,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Профиль сохранён'),
+        SnackBar(
+          content: Text(AppLocalizations.of(context).profileSaved),
           backgroundColor: Colors.green,
         ),
       );
@@ -129,8 +132,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         SnackBar(
           content: Text(
             error.code == 'permission-denied'
-                ? 'Профиль имеет старый формат. Если после заполнения имени ошибка повторится, проверьте uid, телефон, роль и дату создания в Firebase.'
-                : 'Не удалось сохранить профиль: ${error.code}.',
+                ? AppLocalizations.of(context).profileLegacyError
+                : AppLocalizations.of(context).profileSaveCodeError(error.code),
           ),
           backgroundColor: Colors.redAccent,
         ),
@@ -138,8 +141,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Не удалось сохранить профиль.'),
+        SnackBar(
+          content: Text(AppLocalizations.of(context).profileSaveFailed),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -158,12 +161,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   : 'account_delete_first_dialog',
             ),
             title: Text(
-              finalConfirmation ? 'Точно удалить аккаунт?' : 'Удалить аккаунт?',
+              finalConfirmation
+                  ? AppLocalizations.of(dialogContext).profileDeleteFinalTitle
+                  : AppLocalizations.of(dialogContext).profileDeleteTitle,
             ),
             content: Text(
               finalConfirmation
-                  ? 'После продолжения восстановить аккаунт и личные данные будет невозможно.'
-                  : 'Это действие необратимо. Активные заказы и поездки необходимо сначала завершить или отменить.',
+                  ? AppLocalizations.of(dialogContext).profileDeleteFinalWarning
+                  : AppLocalizations.of(dialogContext).profileDeleteWarning,
             ),
             actions: [
               TextButton(
@@ -173,7 +178,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       : 'account_delete_first_cancel',
                 ),
                 onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('Отмена'),
+                child: Text(AppLocalizations.of(dialogContext).cancel),
               ),
               TextButton(
                 key: Key(
@@ -183,7 +188,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 onPressed: () => Navigator.pop(dialogContext, true),
                 style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
-                child: Text(finalConfirmation ? 'Да, удалить' : 'Продолжить'),
+                child: Text(
+                  finalConfirmation
+                      ? AppLocalizations.of(dialogContext).profileYesDelete
+                      : AppLocalizations.of(dialogContext).continueLabel,
+                ),
               ),
             ],
           ),
@@ -200,17 +209,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _deleteAccount() async {
-    if (TulparAuthController.instance.hasSession &&
-        widget.accountDeletionController == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Для удаления аккаунта потребуется повторное подтверждение звонком.',
-          ),
-        ),
-      );
-      return;
-    }
     if (_isDeleting || !await _confirmDeletion(finalConfirmation: false)) {
       return;
     }
@@ -227,8 +225,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final outcome = await controller.deleteWithPassword(password);
       if (!mounted) return;
       final message = outcome == AccountDeletionOutcome.deleted
-          ? 'Аккаунт удалён.'
-          : 'Запрос на удаление принят. Завершение удаления может занять некоторое время.';
+          ? AppLocalizations.of(context).profileDeleted
+          : AppLocalizations.of(context).profileDeletionPending;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
@@ -237,13 +235,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ).pushNamedAndRemoveUntil(AppRoutes.login, (route) => false);
     } on AccountDeletionException catch (error) {
       if (!mounted) return;
+      final l10n = AppLocalizations.of(context);
+      final message = switch (error.code) {
+        'wrong_password' => l10n.profileWrongPassword,
+        'too_many_requests' => l10n.profileTooManyAttempts,
+        'network_error' => l10n.profileNetworkError,
+        'user_disabled' => l10n.profileUserDisabled,
+        'user_not_found' => l10n.profileUserNotFound,
+        'recent_login_required' => l10n.profileRecentLoginRequired,
+        'active_order' => l10n.profileActiveOrder,
+        'active_driver_order' => l10n.profileActiveDriverOrder,
+        'active_ride' => l10n.profileActiveRide,
+        'active_booking' => l10n.profileActiveBooking,
+        'active_ride_request' => l10n.profileActiveRideRequest,
+        'account_deletion_manual_recovery_required' =>
+          l10n.profileDeletionManualReview,
+        'account_deletion_result_unknown' => l10n.profileDeletionUnknown,
+        _ => l10n.profileReauthFailed,
+      };
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text(error.message)));
+      ).showSnackBar(SnackBar(content: Text(message)));
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Не удалось удалить аккаунт.')),
+        SnackBar(
+          content: Text(AppLocalizations.of(context).profileDeleteFailed),
+        ),
       );
     } finally {
       if (mounted) setState(() => _isDeleting = false);
@@ -254,12 +272,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     final mode = appModeFromRoute(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Профиль и настройки')),
+      appBar: AppBar(
+        title: Text(AppLocalizations.of(context).profileSettingsTitle),
+      ),
       drawer: AppDrawer(mode: mode),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _loadError != null
-          ? Center(child: Text(_loadError!))
+          ? Center(
+              child: Text(
+                _loadError == 'not_authenticated'
+                    ? AppLocalizations.of(context).profileNotAuthenticated
+                    : AppLocalizations.of(context).profileLoadFailed,
+              ),
+            )
           : Form(
               key: _formKey,
               child: ListView(
@@ -294,14 +320,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     key: const Key('profile_name_field'),
                     controller: _nameController,
                     textCapitalization: TextCapitalization.words,
-                    decoration: const InputDecoration(
-                      labelText: 'Имя',
-                      prefixIcon: Icon(Icons.person_outline),
+                    decoration: InputDecoration(
+                      labelText: AppLocalizations.of(context).profileName,
+                      prefixIcon: const Icon(Icons.person_outline),
                     ),
                     validator: (value) {
                       final name = value?.trim() ?? '';
-                      if (name.isEmpty) return 'Введите имя';
-                      if (name.length > 80) return 'Имя слишком длинное';
+                      if (name.isEmpty) {
+                        return AppLocalizations.of(context).profileEnterName;
+                      }
+                      if (name.length > 80) {
+                        return AppLocalizations.of(context).profileNameTooLong;
+                      }
                       return null;
                     },
                   ),
@@ -311,10 +341,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     controller: _phoneController,
                     readOnly: true,
                     enableInteractiveSelection: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Номер телефона',
-                      helperText: 'Номер телефона нельзя изменить',
-                      prefixIcon: Icon(Icons.phone_outlined),
+                    decoration: InputDecoration(
+                      labelText: AppLocalizations.of(context).profilePhone,
+                      helperText: AppLocalizations.of(
+                        context,
+                      ).profilePhoneReadonly,
+                      prefixIcon: const Icon(Icons.phone_outlined),
                     ),
                   ),
                   if (mode == AppMode.driver) ...[
@@ -322,9 +354,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     TextFormField(
                       key: const Key('profile_car_field'),
                       controller: _carController,
-                      decoration: const InputDecoration(
-                        labelText: 'Марка и модель авто',
-                        prefixIcon: Icon(Icons.directions_car_outlined),
+                      decoration: InputDecoration(
+                        labelText: AppLocalizations.of(context).profileCar,
+                        prefixIcon: const Icon(Icons.directions_car_outlined),
                       ),
                     ),
                   ],
@@ -332,22 +364,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   DropdownButtonFormField<AppThemePreference>(
                     key: const Key('theme_preference_field'),
                     initialValue: _themeController.preference,
-                    decoration: const InputDecoration(
-                      labelText: 'Тема',
-                      prefixIcon: Icon(Icons.palette_outlined),
+                    decoration: InputDecoration(
+                      labelText: AppLocalizations.of(context).profileTheme,
+                      prefixIcon: const Icon(Icons.palette_outlined),
                     ),
-                    items: const [
+                    items: [
                       DropdownMenuItem(
                         value: AppThemePreference.system,
-                        child: Text('Как в системе'),
+                        child: Text(
+                          AppLocalizations.of(context).profileThemeSystem,
+                        ),
                       ),
                       DropdownMenuItem(
                         value: AppThemePreference.light,
-                        child: Text('Светлая'),
+                        child: Text(
+                          AppLocalizations.of(context).profileThemeLight,
+                        ),
                       ),
                       DropdownMenuItem(
                         value: AppThemePreference.dark,
-                        child: Text('Тёмная'),
+                        child: Text(
+                          AppLocalizations.of(context).profileThemeDark,
+                        ),
                       ),
                     ],
                     onChanged: (preference) {
@@ -357,18 +395,52 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     },
                   ),
                   const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    key: ValueKey(
+                      'profile_language_${Localizations.localeOf(context).languageCode}',
+                    ),
+                    initialValue:
+                        appLocaleController.effectiveLocale.languageCode,
+                    decoration: InputDecoration(
+                      labelText: AppLocalizations.of(context).languageSetting,
+                      prefixIcon: const Icon(Icons.language),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'ru', child: Text('Русский')),
+                      DropdownMenuItem(value: 'kk', child: Text('Қазақша')),
+                      DropdownMenuItem(value: 'en', child: Text('English')),
+                    ],
+                    onChanged: (code) {
+                      if (code != null) {
+                        unawaited(appLocaleController.choose(code));
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
                   SwitchListTile(
                     key: const Key('voice_guidance_setting'),
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('Голосовые подсказки'),
-                    subtitle: const Text(
-                      'Озвучивать манёвры во время навигации',
+                    title: Text(AppLocalizations.of(context).profileVoice),
+                    subtitle: Text(
+                      AppLocalizations.of(context).profileVoiceHint,
                     ),
                     secondary: const Icon(Icons.volume_up_outlined),
                     value: _voiceGuidanceSettings.enabled,
                     onChanged: _voiceGuidanceSettings.setEnabled,
                   ),
                   const SizedBox(height: 24),
+                  ListTile(
+                    key: const Key('about_support_link'),
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.info_outline),
+                    title: Text(
+                      AppLocalizations.of(context).aboutSupportTitle,
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(
+                      context,
+                    ).pushNamed(AppRoutes.aboutSupport),
+                  ),
                   ElevatedButton(
                     key: const Key('save_profile_button'),
                     onPressed: _isSaving ? null : _saveProfile,
@@ -380,7 +452,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             dimension: 22,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Text('Сохранить данные'),
+                        : Text(AppLocalizations.of(context).profileSave),
                   ),
                   const SizedBox(height: 28),
                   const Divider(),
@@ -399,7 +471,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.delete_forever_outlined),
-                    label: const Text('Удалить аккаунт'),
+                    label: Text(
+                      AppLocalizations.of(context).profileDeleteTitle,
+                    ),
                   ),
                 ],
               ),
@@ -432,14 +506,14 @@ class _PasswordConfirmationDialogState
   Widget build(BuildContext context) {
     return AlertDialog(
       key: const Key('account_delete_password_dialog'),
-      title: const Text('Подтвердите пароль'),
+      title: Text(AppLocalizations.of(context).profilePasswordTitle),
       content: TextField(
         key: const Key('account_delete_password_field'),
         controller: _controller,
         obscureText: true,
         autofocus: true,
         decoration: InputDecoration(
-          labelText: 'Текущий пароль',
+          labelText: AppLocalizations.of(context).profileCurrentPassword,
           errorText: _errorText,
         ),
       ),
@@ -447,18 +521,22 @@ class _PasswordConfirmationDialogState
         TextButton(
           key: const Key('account_delete_password_cancel'),
           onPressed: () => Navigator.pop(context),
-          child: const Text('Отмена'),
+          child: Text(AppLocalizations.of(context).cancel),
         ),
         FilledButton(
           key: const Key('account_delete_password_confirm'),
           onPressed: () {
             if (_controller.text.isEmpty) {
-              setState(() => _errorText = 'Введите пароль');
+              setState(
+                () => _errorText = AppLocalizations.of(
+                  context,
+                ).profileEnterPassword,
+              );
               return;
             }
             Navigator.pop(context, _controller.text);
           },
-          child: const Text('Удалить аккаунт'),
+          child: Text(AppLocalizations.of(context).profileDeleteTitle),
         ),
       ],
     );

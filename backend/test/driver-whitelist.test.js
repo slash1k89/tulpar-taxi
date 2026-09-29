@@ -148,10 +148,10 @@ test('backfill is restricted to active profiles with verified whitelist identity
   assert.doesNotMatch(sql, /driver_subscriptions/);
 });
 
-test('available city orders require active profile and exemption OR paid subscription', async () => {
+test('available city orders are free for every approved active driver', async () => {
   for (const [status, exempt, paid, expected] of [
     ['active', true, false, 200],
-    ['active', false, false, 403],
+    ['active', false, false, 200],
     ['active', false, true, 200],
     ['pending', true, false, 403],
     ['suspended', true, true, 403],

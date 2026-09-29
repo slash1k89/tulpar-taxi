@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/rating_service.dart';
+import '../l10n/generated/app_localizations.dart';
 
 class RatingDialog extends StatefulWidget {
   final String targetUserId;
@@ -50,15 +51,19 @@ class _RatingDialogState extends State<RatingDialog> {
 
       Navigator.of(context).pop(true);
     } on RatingSubmissionException catch (error) {
-      _showError(error.message);
+      final l10n = AppLocalizations.of(context);
+      _showError(switch (error.failure) {
+        RatingSubmissionFailure.invalidRequest => l10n.ratingInvalidRequest,
+        RatingSubmissionFailure.forbidden => l10n.ratingForbidden,
+        RatingSubmissionFailure.orderMissing => l10n.ratingOrderMissing,
+        RatingSubmissionFailure.alreadySent => l10n.ratingAlreadySent,
+        RatingSubmissionFailure.notCompleted => l10n.ratingNotCompleted,
+        RatingSubmissionFailure.invalidScore => l10n.ratingInvalidScore,
+        RatingSubmissionFailure.failed => l10n.ratingFailed,
+        null => l10n.ratingFailed,
+      });
     } catch (_) {
-      _showError(
-        '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c '
-        '\u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c '
-        '\u043e\u0446\u0435\u043d\u043a\u0443. '
-        '\u041f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 '
-        '\u0435\u0449\u0451 \u0440\u0430\u0437.',
-      );
+      _showError(AppLocalizations.of(context).ratingFailed);
     } finally {
       if (mounted) {
         setState(() => _isSubmitting = false);
@@ -81,7 +86,11 @@ class _RatingDialogState extends State<RatingDialog> {
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
       title: Text(
-        'Оцените ${widget.targetLabel ?? (widget.isRatingDriver ? 'водителя' : 'пассажира')}',
+        widget.targetLabel != null
+            ? AppLocalizations.of(context).ratingTitleName(widget.targetLabel!)
+            : widget.isRatingDriver
+            ? AppLocalizations.of(context).ratingTitleDriver
+            : AppLocalizations.of(context).ratingTitlePassenger,
       ),
       content: SizedBox(
         width: 320,
@@ -95,7 +104,9 @@ class _RatingDialogState extends State<RatingDialog> {
                   dimension: 48,
                   child: IconButton(
                     key: ValueKey('rating_star_${index + 1}'),
-                    tooltip: '${index + 1} из 5',
+                    tooltip: AppLocalizations.of(
+                      context,
+                    ).ratingStarTooltip(index + 1),
                     padding: const EdgeInsets.all(6),
                     icon: Icon(
                       index < _rating ? Icons.star : Icons.star_border,
@@ -118,9 +129,9 @@ class _RatingDialogState extends State<RatingDialog> {
                 minLines: 2,
                 maxLines: 4,
                 maxLength: 500,
-                decoration: const InputDecoration(
-                  hintText: 'Напишите отзыв (необязательно)',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  hintText: AppLocalizations.of(context).ratingReviewHint,
+                  border: const OutlineInputBorder(),
                 ),
               ),
             ],
@@ -130,7 +141,7 @@ class _RatingDialogState extends State<RatingDialog> {
       actions: [
         TextButton(
           onPressed: _isSubmitting ? null : () => Navigator.pop(context, false),
-          child: const Text('\u041e\u0442\u043c\u0435\u043d\u0430'),
+          child: Text(AppLocalizations.of(context).ratingCancel),
         ),
         ElevatedButton(
           style: ElevatedButton.styleFrom(
@@ -143,9 +154,7 @@ class _RatingDialogState extends State<RatingDialog> {
                   dimension: 20,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Text(
-                  '\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c',
-                ),
+              : Text(AppLocalizations.of(context).ratingSubmit),
         ),
       ],
     );

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -213,55 +214,61 @@ void main() {
     expect(apiCalls, 0);
   });
 
-  test('accepted deletion runs every cleanup step despite local failures', () async {
-    final events = <String>[];
-    final gateway = _FakeGateway(events, signOutError: StateError('signout'));
-    final controller = DefaultAccountDeletionController(
-      reauthentication: gateway,
-      apiClient: TulparApiClient(
-        client: MockClient(
-          (_) async => http.Response('{"status":"deletion_pending"}', 202),
+  test(
+    'accepted deletion runs every cleanup step despite local failures',
+    () async {
+      final events = <String>[];
+      final gateway = _FakeGateway(events, signOutError: StateError('signout'));
+      final controller = DefaultAccountDeletionController(
+        reauthentication: gateway,
+        apiClient: TulparApiClient(
+          client: MockClient(
+            (_) async => http.Response('{"status":"deletion_pending"}', 202),
+          ),
+          tokenProvider: () async => 'fresh-token',
         ),
-        tokenProvider: () async => 'fresh-token',
-      ),
-      agreementService: _FailingAgreementService(),
-      clearPushToken: () async {
-        events.add('push');
-        throw StateError('push');
-      },
-    );
+        agreementService: _FailingAgreementService(),
+        clearPushToken: () async {
+          events.add('push');
+          throw StateError('push');
+        },
+      );
 
-    final outcome = await controller.deleteWithPassword('secret-password');
-    expect(outcome, AccountDeletionOutcome.pending);
-    expect(events, ['reauth', 'refresh', 'push', 'signout']);
-  });
+      final outcome = await controller.deleteWithPassword('secret-password');
+      expect(outcome, AccountDeletionOutcome.pending);
+      expect(events, ['reauth', 'refresh', 'push', 'signout']);
+    },
+  );
 
-  test('ambiguous DELETE timeout keeps session and supports safe retry', () async {
-    final events = <String>[];
-    var pushCleared = false;
-    final controller = DefaultAccountDeletionController(
-      reauthentication: _FakeGateway(events),
-      apiClient: TulparApiClient(
-        client: MockClient((_) => Completer<http.Response>().future),
-        tokenProvider: () async => 'fresh-token',
-        accountDeletionTimeout: const Duration(milliseconds: 1),
-      ),
-      clearPushToken: () async => pushCleared = true,
-    );
-
-    await expectLater(
-      controller.deleteWithPassword('secret-password'),
-      throwsA(
-        isA<AccountDeletionException>().having(
-          (error) => error.code,
-          'code',
-          'account_deletion_result_unknown',
+  test(
+    'ambiguous DELETE timeout keeps session and supports safe retry',
+    () async {
+      final events = <String>[];
+      var pushCleared = false;
+      final controller = DefaultAccountDeletionController(
+        reauthentication: _FakeGateway(events),
+        apiClient: TulparApiClient(
+          client: MockClient((_) => Completer<http.Response>().future),
+          tokenProvider: () async => 'fresh-token',
+          accountDeletionTimeout: const Duration(milliseconds: 1),
         ),
-      ),
-    );
-    expect(events, ['reauth', 'refresh']);
-    expect(pushCleared, false);
-  });
+        clearPushToken: () async => pushCleared = true,
+      );
+
+      await expectLater(
+        controller.deleteWithPassword('secret-password'),
+        throwsA(
+          isA<AccountDeletionException>().having(
+            (error) => error.code,
+            'code',
+            'account_deletion_result_unknown',
+          ),
+        ),
+      );
+      expect(events, ['reauth', 'refresh']);
+      expect(pushCleared, false);
+    },
+  );
 }
 
 Future<void> _pumpProfile(
@@ -273,10 +280,13 @@ Future<void> _pumpProfile(
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MaterialApp(
+      locale: const Locale('ru'),
       routes: {
         AppRoutes.login: (_) =>
             const Scaffold(body: Text('Login', key: Key('login_probe'))),
       },
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: ProfileScreen(
         repository: _ProfileRepository(),
         themeController: ThemeController(store: _ThemeStore()),

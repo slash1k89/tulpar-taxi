@@ -19,11 +19,14 @@ import 'screens/intercity/intercity_ride_search_screen.dart';
 import 'screens/map/map_screen.dart';
 import 'screens/profile/history_screen.dart';
 import 'screens/profile/profile_screen.dart';
+import 'screens/legal/about_support_screen.dart';
 import 'screens/splash_screen.dart';
 import 'services/push_notification_service.dart';
 import 'services/startup_diagnostics.dart';
 import 'services/theme_service.dart';
 import 'services/tulpar_auth_session.dart';
+import 'services/locale_controller.dart';
+import 'l10n/generated/app_localizations.dart';
 import 'models/order_service_type.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
@@ -35,11 +38,26 @@ const _emulatorHost = String.fromEnvironment(
   defaultValue: '10.0.2.2',
 );
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  registerFirebaseMessagingBackgroundHandler();
   StartupDiagnostics.mark('process start');
 
   final requiredInitialization = _initializeRequiredServices();
+  try {
+    await appLocaleController.load();
+  } catch (error) {
+    StartupDiagnostics.error('language preference load failed', error);
+  }
+
+  unawaited(() async {
+    try {
+      await requiredInitialization;
+      await appLocaleController.syncIfAuthenticated();
+    } catch (_) {
+      // The startup screen handles required initialization failures.
+    }
+  }());
 
   runApp(TaxiApp(startupInitialization: requiredInitialization));
   StartupDiagnostics.mark('runApp');
@@ -133,21 +151,37 @@ class TaxiApp extends StatelessWidget {
   const TaxiApp({
     super.key,
     this.themeController,
+    this.localeController,
     this.home,
     this.startupInitialization,
   });
 
   final ThemeController? themeController;
+  final LocaleController? localeController;
   final Widget? home;
   final Future<void>? startupInitialization;
 
   @override
   Widget build(BuildContext context) {
     final controller = themeController ?? appThemeController;
+    final language = localeController ?? appLocaleController;
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) => MaterialApp(
-        title: 'TULPAR taxi',
+        locale: language.effectiveLocale,
+        localeResolutionCallback: (device, supported) =>
+            LocaleController.resolveLocale(device ?? const Locale('ru')),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        builder: (context, child) => AnimatedBuilder(
+          animation: language,
+          builder: (context, _) => Localizations.override(
+            context: context,
+            locale: language.effectiveLocale,
+            child: child!,
+          ),
+        ),
+        title: 'MEKEN',
         debugShowCheckedModeBanner: false,
         navigatorKey: navigatorKey,
         scaffoldMessengerKey: scaffoldMessengerKey,
@@ -222,6 +256,7 @@ class TaxiApp extends StatelessWidget {
           AppRoutes.driverOnboarding: (_) => const DriverOnboardingScreen(),
           AppRoutes.history: (_) => const HistoryScreen(),
           AppRoutes.profile: (_) => const ProfileScreen(),
+          AppRoutes.aboutSupport: (_) => const AboutSupportScreen(),
           AppRoutes.login: (_) => const LoginScreen(),
         },
         home: home ?? SplashScreen(appInitialization: startupInitialization),

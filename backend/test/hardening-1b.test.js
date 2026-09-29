@@ -19,6 +19,7 @@ const now = new Date('2026-08-25T12:00:00.000Z');
 function validCityPayload(overrides = {}) {
   return {
     serviceType: 'city',
+    cityId: 'esil',
     passengerPrice: 1_000,
     pickupAddress: 'Есиль, ул. Абая, 1',
     destinationAddress: 'Есиль, ул. Ауэзова, 2',
@@ -82,20 +83,13 @@ function createValidOrderApp() {
       if (query.startsWith('SELECT 1 FROM account_deletion_jobs')) {
         return { rows: [], rowCount: 0 };
       }
+      if (query.startsWith('SELECT id, slug FROM cities')) {
+        const cities = { esil: 1, rudny: 5 };
+        const id = cities[params[0]];
+        return { rows: id ? [{ id, slug: params[0] }] : [] };
+      }
       if (query.includes('FROM users') && query.includes('firebase_uid')) {
         return { rows: [{ id: 'passenger-1' }] };
-      }
-      if (query.includes('FROM service_tariffs')) {
-        return {
-          rows: [
-            {
-              minimum_day_fare: 600,
-              minimum_night_fare: 700,
-              day_start_hour: 6,
-              night_start_hour: 22,
-            },
-          ],
-        };
       }
       if (query.startsWith('INSERT INTO orders')) {
         return {
@@ -113,11 +107,13 @@ function createValidOrderApp() {
               destination_lat: params[7],
               destination_lng: params[8],
               distance_meters: params[9],
+              city_id: params[10],
               created_at: now,
             },
           ],
         };
       }
+      if (query.startsWith('INSERT INTO order_stops')) return { rows: [] };
       if (
         query.startsWith('INSERT INTO delivery_details') ||
         query.startsWith('INSERT INTO intercity_details')
@@ -324,7 +320,92 @@ test('valid city, delivery and intercity payloads remain accepted', async () => 
     assert.equal(response.status, 201);
     assert.equal(response.body.serviceType, payload.serviceType);
     assert.equal(response.body.status, 'searching');
+    if (payload.serviceType !== 'intercity') assert.equal(response.body.cityId, 'esil');
   }
+});
+
+test('legacy city and delivery default only to Esil; explicit city is preserved', async () => {
+  for (const serviceType of ['city', 'delivery']) {
+    const payload = validCityPayload({ cityId: undefined, serviceType });
+    if (serviceType === 'delivery') {
+      Object.assign(payload, {
+        itemDescription: 'Посылка',
+        senderName: 'Айжан',
+        recipientName: 'Сергей',
+        recipientPhone: '+77001234567',
+        pickupHandoffType: 'door',
+        destinationHandoffType: 'outside',
+      });
+    }
+    const legacy = await request(createValidOrderApp()).post('/api/orders')
+      .send(payload);
+    assert.equal(legacy.status, 201);
+    assert.equal(legacy.body.cityId, 'esil');
+  }
+
+  const explicit = await request(createValidOrderApp()).post('/api/orders')
+    .send(validCityPayload({ cityId: 'rudny' }));
+  assert.equal(explicit.status, 201);
+  assert.equal(explicit.body.cityId, 'rudny');
+
+  const invalid = await request(createValidOrderApp()).post('/api/orders')
+    .send(validCityPayload({ cityId: 'unknown' }));
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.body.code, 'invalid_city');
+});
+
+test('city order accepts any positive passenger price without a fare floor', async () => {
+  for (const passengerPrice of [1, 100, 599]) {
+    const response = await request(createValidOrderApp())
+      .post('/api/orders')
+      .send(validCityPayload({ passengerPrice }));
+    assert.equal(response.status, 201);
+    assert.equal(response.body.passengerPrice, passengerPrice);
+  }
+});
+
+test('city order still rejects zero and negative prices', () => {
+  for (const passengerPrice of [0, -1]) {
+    const result = validateOrderCreatePayload(
+      validCityPayload({ passengerPrice }),
+      { now },
+    );
+    assert.equal(result.ok, false);
+  }
+});
+
+test('city stops accept one to four destinations and preserve sequence', async () => {
+  for (const count of [1, 2, 4]) {
+    const stops = Array.from({ length: count }, (_, sequence) => ({
+      address: `Stop ${sequence + 1}`,
+      latitude: 51.96 + sequence / 1000,
+      longitude: 66.41 + sequence / 1000,
+    }));
+    const final = stops.at(-1);
+    const payload = validCityPayload({
+      destinationAddress: final.address,
+      destinationLat: final.latitude,
+      destinationLng: final.longitude,
+      stops,
+    });
+    const validation = validateOrderCreatePayload(payload, { now });
+    assert.equal(validation.ok, true);
+    assert.deepEqual(validation.value.stops.map((stop) => stop.sequence),
+      Array.from({ length: count }, (_, index) => index));
+    assert.equal((await request(createValidOrderApp()).post('/api/orders').send(payload)).status, 201);
+  }
+});
+
+test('fifth destination and mismatched final destination are rejected', () => {
+  const stops = Array.from({ length: 5 }, (_, index) => ({
+    address: `Stop ${index}`,
+    latitude: 51.96,
+    longitude: 66.41,
+  }));
+  assert.equal(validateOrderCreatePayload(validCityPayload({ stops }), { now }).ok, false);
+  assert.equal(validateOrderCreatePayload(validCityPayload({
+    stops: [{ address: 'Different', latitude: 51.96, longitude: 66.41 }],
+  }), { now }).ok, false);
 });
 
 test('stale city and delivery searching orders expire after two hours', () => {
@@ -541,6 +622,7 @@ function createAcceptAppWithPostCommitFailure({
               car_model: 'Toyota',
               car_color: 'Белый',
               car_number: '123ABC01',
+              work_city_id: 1,
             },
           ],
         };
@@ -554,9 +636,14 @@ function createAcceptAppWithPostCommitFailure({
               driver_id: null,
               status: 'searching',
               passenger_price: 1_000,
+              service_type: 'city',
+              city_id: 1,
             },
           ],
         };
+      }
+      if (query.includes('FROM user_blocks')) {
+        return { rows: [], rowCount: 0 };
       }
       if (query.includes('FROM orders') && query.includes('driver_id = $1')) {
         return { rows: [] };
@@ -569,6 +656,7 @@ function createAcceptAppWithPostCommitFailure({
               passenger_id: 'passenger-1',
               driver_id: 'driver-1',
               status: 'accepted',
+              service_type: 'city',
               passenger_price: 1_000,
               agreed_price: 1_000,
               accepted_at: now,
@@ -705,6 +793,8 @@ test('active passenger order query has a valid SELECT list before FROM', async (
         activeQueryCalls++;
         assert.doesNotMatch(query, /,\s*FROM users u/i);
         assert.match(query, /dp\.car_number FROM users u/i);
+        assert.match(query, /FROM order_stops s WHERE s\.order_id = o\.id/i);
+        assert.match(query, /COALESCE\(/i);
         return {
           rows: [
             {
@@ -729,6 +819,10 @@ test('active passenger order query has a valid SELECT list before FROM', async (
               car_model: 'Toyota',
               car_color: 'Blue',
               car_number: '123 ABC',
+              stops: [
+                { sequence: 0, address: 'Stop', latitude: 51.95, longitude: 66.45 },
+                { sequence: 1, address: 'Destination', latitude: 52.0, longitude: 66.5 },
+              ],
             },
           ],
         };
@@ -756,4 +850,5 @@ test('active passenger order query has a valid SELECT list before FROM', async (
   assert.equal(response.body.activeOrder.role, 'passenger');
   assert.equal(response.body.activeOrder.status, 'in_progress');
   assert.equal(response.body.activeOrder.driverLat, 51.95);
+  assert.deepEqual(response.body.activeOrder.stops.map((stop) => stop.sequence), [0, 1]);
 });

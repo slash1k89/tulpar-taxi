@@ -67,6 +67,22 @@ void main() {
     await writer.close();
   });
 
+  test('failed GPS write is retried without losing the latest point', () async {
+    final writes = <int>[];
+    final writer = LatestValueWriteThrottler<int>(
+      minimumInterval: const Duration(milliseconds: 20),
+      write: (value) async {
+        writes.add(value);
+        if (writes.length == 1) throw StateError('temporary network failure');
+      },
+    );
+    await expectLater(writer.writeImmediately(1), throwsStateError);
+    writer.add(2);
+    await Future<void>.delayed(const Duration(milliseconds: 45));
+    expect(writes, [1, 2]);
+    await writer.close();
+  });
+
   test('single-key future cache reuses a load until the key changes', () async {
     final cache = SingleKeyFutureCache<String, int>();
     var loadCount = 0;

@@ -9,6 +9,9 @@ import 'package:taxi_esil/services/rating_service.dart';
 import 'package:taxi_esil/app_routes.dart';
 import 'package:taxi_esil/widgets/order_route_polyline_layer.dart';
 import 'package:taxi_esil/widgets/tulpar_map_visuals.dart';
+import 'package:taxi_esil/widgets/chat_unread_badge.dart';
+import 'package:taxi_esil/widgets/order_stops_view.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 const _start = LatLng(51.9555, 66.4032);
 const _middle = LatLng(51.96, 66.41);
@@ -66,6 +69,9 @@ Future<void> _pumpTrackingScreen(
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      locale: const Locale('ru'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       routes: {
         AppRoutes.map: (_) => const Scaffold(body: Text('clean passenger map')),
       },
@@ -90,23 +96,133 @@ PolylineLayer _routeLayer(WidgetTester tester) {
 }
 
 void main() {
+  testWidgets('visible order is recognized before push opens another copy', (
+    tester,
+  ) async {
+    await _pumpTrackingScreen(
+      tester,
+      initialOrderData: _orderData(),
+      orderStream: const Stream.empty(),
+      routeLoader: _RouteLoader(),
+    );
+    expect(OrderTrackingScreen.isCurrentOrder('order-1'), isTrue);
+    expect(OrderTrackingScreen.isCurrentOrder('another-order'), isFalse);
+    Navigator.of(tester.element(find.byType(OrderTrackingScreen))).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('covered')),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(OrderTrackingScreen.isCurrentOrder('order-1'), isFalse);
+    await tester.pumpWidget(const SizedBox());
+    expect(OrderTrackingScreen.isCurrentOrder('order-1'), isFalse);
+  });
+  for (final stopCount in [1, 2, 4]) {
+    testWidgets(
+      'in-progress passenger keeps route, chat and cancellation for $stopCount destinations',
+      (tester) async {
+        final orders = StreamController<Map<String, dynamic>?>.broadcast();
+        addTearDown(orders.close);
+        final data = _orderData(status: 'in_progress', driverId: 'driver-1')
+          ..['stops'] = List.generate(
+            stopCount,
+            (index) => {
+              'sequence': index,
+              'address': 'Point ${index + 1}',
+              'latitude': 51.96 + index / 1000,
+              'longitude': 66.41 + index / 1000,
+            },
+          );
+        await _pumpTrackingScreen(
+          tester,
+          initialOrderData: data,
+          orderStream: orders.stream,
+          routeLoader: _RouteLoader(),
+        );
+        expect(find.byType(OrderStopsView), findsOneWidget);
+        expect(find.byType(ChatUnreadBadge), findsOneWidget);
+        expect(find.text('Чат'), findsOneWidget);
+        final cancel = find.widgetWithText(OutlinedButton, 'Отменить');
+        expect(cancel, findsOneWidget);
+        expect(tester.widget<OutlinedButton>(cancel).onPressed, isNotNull);
+        await tester.tap(cancel);
+        await tester.pumpAndSettle();
+        expect(find.text('Выберите причину отмены'), findsOneWidget);
+        await tester.tap(find.text('Нет'));
+        await tester.pumpAndSettle();
+        orders.add({
+          ...data,
+          'stops': [
+            {
+              ...(data['stops'] as List).first,
+              'reachedAt': '2026-09-19T08:00:00Z',
+            },
+            ...(data['stops'] as List).skip(1),
+          ],
+        });
+        await tester.pump();
+        expect(find.byType(ChatUnreadBadge), findsOneWidget);
+        expect(find.widgetWithText(OutlinedButton, 'Отменить'), findsOneWidget);
+      },
+    );
+  }
+
   testWidgets('passenger tracking panel collapses and expands', (tester) async {
     final orders = StreamController<Map<String, dynamic>?>.broadcast();
     addTearDown(orders.close);
     await _pumpTrackingScreen(
       tester,
-      initialOrderData: _orderData(),
+      initialOrderData: _orderData(status: 'accepted', driverId: 'driver-1'),
       orderStream: orders.stream,
       routeLoader: _RouteLoader(),
     );
     final toggle = find.byKey(const Key('passenger_tracking_panel_toggle'));
     expect(toggle, findsOneWidget);
+    expect(find.textContaining('Toyota'), findsOneWidget);
     await tester.tap(toggle);
     await tester.pump();
-    expect(find.text('Отменить поиск'), findsNothing);
+    expect(find.textContaining('Toyota'), findsNothing);
     await tester.tap(toggle);
     await tester.pump();
-    expect(find.text('Отменить поиск'), findsOneWidget);
+    expect(find.textContaining('Toyota'), findsOneWidget);
+  });
+
+  testWidgets('searching without driver has no driver status banner', (
+    tester,
+  ) async {
+    final orders = StreamController<Map<String, dynamic>?>.broadcast();
+    addTearDown(orders.close);
+    await _pumpTrackingScreen(
+      tester,
+      initialOrderData: _orderData(status: 'searching'),
+      orderStream: orders.stream,
+      routeLoader: _RouteLoader(),
+    );
+
+    expect(
+      find.byKey(const Key('passenger_driver_status_banner')),
+      findsNothing,
+    );
+    expect(find.text('Поиск свободного водителя...'), findsOneWidget);
+  });
+
+  testWidgets('accepted order with driver shows driver status banner', (
+    tester,
+  ) async {
+    final orders = StreamController<Map<String, dynamic>?>.broadcast();
+    addTearDown(orders.close);
+    await _pumpTrackingScreen(
+      tester,
+      initialOrderData: _orderData(status: 'accepted', driverId: 'driver-1'),
+      orderStream: orders.stream,
+      routeLoader: _RouteLoader(),
+    );
+
+    expect(
+      find.byKey(const Key('passenger_driver_status_banner')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Водитель едет к вам'), findsWidgets);
   });
 
   testWidgets('route and endpoint markers are visible while searching', (

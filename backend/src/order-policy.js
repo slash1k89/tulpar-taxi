@@ -137,6 +137,27 @@ export function validateOrderCreatePayload(body, { now = new Date() } = {}) {
   );
   if (!destination.ok) return destination;
 
+  let stops = null;
+  if (source.stops !== undefined) {
+    if (serviceType !== 'city' || !Array.isArray(source.stops) || source.stops.length < 1 || source.stops.length > 4) {
+      return invalid('Invalid order stops');
+    }
+    stops = [];
+    for (let index = 0; index < source.stops.length; index++) {
+      const raw = source.stops[index];
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return invalid('Invalid order stop');
+      const address = requiredString(raw.address, 'stop address', orderValidationLimits.address);
+      if (!address.ok) return address;
+      const point = coordinatePair(raw.latitude, raw.longitude, 'stop');
+      if (!point.ok || point.lat === null) return invalid('Invalid order stop coordinates');
+      stops.push({ sequence: index, type: 'destination', address: address.value, latitude: point.lat, longitude: point.lng });
+    }
+    const finalStop = stops.at(-1);
+    if (finalStop.address !== destinationAddress.value || finalStop.latitude !== destination.lat || finalStop.longitude !== destination.lng) {
+      return invalid('Final stop must match destination');
+    }
+  }
+
   let distanceMeters = source.distanceMeters;
   if (distanceMeters === null || distanceMeters === undefined) {
     distanceMeters = null;
@@ -158,6 +179,7 @@ export function validateOrderCreatePayload(body, { now = new Date() } = {}) {
     destinationLat: destination.lat,
     destinationLng: destination.lng,
     distanceMeters,
+    stops,
   };
 
   if (serviceType === 'delivery') {

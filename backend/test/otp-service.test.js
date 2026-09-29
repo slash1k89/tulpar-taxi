@@ -45,16 +45,18 @@ class MemoryOtpPool {
     if (sql.includes('INSERT INTO auth_otp_challenges')) {
       this.rows.push({
         id: values[0], phone_normalized: values[1], code_hash: values[2],
-        purpose: values[3], created_at: values[4], expires_at: values[5],
+        purpose: values[3], method: 'sms',
+        created_at: values[4], expires_at: values[5],
         attempts_count: 0, max_attempts: values[6],
         resend_available_at: values[7], consumed_at: null,
         request_ip: values[8], device_id: values[9],
       });
       return { rows: [], rowCount: 1 };
     }
-    if (sql.includes("purpose = 'login'") && sql.includes('FOR UPDATE')) {
+    if (sql.includes('purpose = $4') && sql.includes('FOR UPDATE')) {
       const row = this.rows.find((item) =>
-        item.id === values[0] && item.phone_normalized === values[1] && item.purpose === 'login');
+        item.id === values[0] && item.phone_normalized === values[1] &&
+        item.method === values[2] && item.purpose === values[3]);
       return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
     }
     if (sql.includes('SET attempts_count = attempts_count + 1')) {

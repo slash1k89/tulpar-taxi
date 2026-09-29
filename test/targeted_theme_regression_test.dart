@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:taxi_esil/screens/auth/register_screen.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 import 'package:taxi_esil/screens/driver/driver_onboarding_screen.dart';
 import 'package:taxi_esil/services/driver_agreement_service.dart';
 import 'package:taxi_esil/services/driver_profile_service.dart';
@@ -16,6 +17,8 @@ void main() {
       );
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           theme: ThemeData(colorScheme: colorScheme),
           home: const RegisterScreen(),
         ),

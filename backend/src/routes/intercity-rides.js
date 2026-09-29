@@ -12,6 +12,7 @@ import {
   validateIntercityRideRequestCreate,
   validateIntercityRideSearch,
 } from '../intercity-ride-policy.js';
+import { areUsersBlocked } from '../block-policy.js';
 
 const selectRide = `SELECT r.*, u.name AS driver_name, dp.car_model,
     dp.car_color
@@ -31,6 +32,7 @@ const selectBooking = `SELECT
     b.pickup_lat,
     b.pickup_lng,
     b.passenger_comment,
+    b.pickup_reached_at,
     b.cancelled_at AS booking_cancelled_at,
     b.completed_at AS booking_completed_at,
     b.created_at AS booking_created_at,
@@ -95,6 +97,10 @@ function publicRide(row) {
 
 function publicBooking(row, { viewer }) {
   const confirmed = row.booking_status === 'confirmed';
+  const completedRecently = row.booking_status === 'completed'
+    && row.booking_completed_at
+    && Date.now() - new Date(row.booking_completed_at).getTime() <= 24 * 60 * 60 * 1000;
+  const contactAllowed = confirmed || completedRecently;
   const result = {
     bookingId: row.booking_id,
     rideId: row.ride_id,
@@ -120,6 +126,8 @@ function publicBooking(row, { viewer }) {
     pickupLat: row.pickup_lat == null ? null : Number(row.pickup_lat),
     pickupLng: row.pickup_lng == null ? null : Number(row.pickup_lng),
     passengerComment: row.passenger_comment ?? null,
+    pickupReachedAt: row.pickup_reached_at ?? null,
+    chatAvailable: contactAllowed,
   };
 
   if (viewer === 'passenger') {
@@ -128,13 +136,13 @@ function publicBooking(row, { viewer }) {
       carModel: row.car_model ?? null,
       carColor: row.car_color ?? null,
     };
-    if (confirmed) {
+    if (contactAllowed) {
       result.driver.carNumber = row.car_number ?? null;
       if (row.driver_phone) result.driver.phone = row.driver_phone;
     }
   } else {
     result.passenger = { name: row.passenger_name ?? null };
-    if (confirmed && row.passenger_phone) {
+    if (contactAllowed && row.passenger_phone) {
       result.passenger.phone = row.passenger_phone;
     }
   }
@@ -249,6 +257,11 @@ async function matchRidesForRequest(queryable, rideRequest) {
        AND r.destination_city_key = $3
        AND (r.departure_at AT TIME ZONE 'Asia/Almaty')::date = $4::date
        AND r.available_seats >= $5
+       AND NOT EXISTS (
+         SELECT 1 FROM user_blocks ub
+         WHERE (ub.blocker_user_id = $6 AND ub.blocked_user_id = r.driver_id)
+            OR (ub.blocker_user_id = r.driver_id AND ub.blocked_user_id = $6)
+       )
      ON CONFLICT (request_id, ride_id) DO NOTHING
      RETURNING ride_id`,
     [
@@ -257,6 +270,7 @@ async function matchRidesForRequest(queryable, rideRequest) {
       rideRequest.destination_city_key,
       rideRequest.travel_date,
       rideRequest.seats,
+      rideRequest.passenger_id,
     ],
   );
   return result.rows.map((row) => row.ride_id);
@@ -274,6 +288,11 @@ async function matchRequestsForRide(queryable, ride) {
          ($4::timestamptz AT TIME ZONE 'Asia/Almaty')::date
        AND q.seats <= $5
        AND $4::timestamptz > now()
+       AND NOT EXISTS (
+         SELECT 1 FROM user_blocks ub
+         WHERE (ub.blocker_user_id = q.passenger_id AND ub.blocked_user_id = $6)
+            OR (ub.blocker_user_id = $6 AND ub.blocked_user_id = q.passenger_id)
+       )
      ON CONFLICT (request_id, ride_id) DO NOTHING
      RETURNING request_id`,
     [
@@ -282,6 +301,7 @@ async function matchRequestsForRide(queryable, ride) {
       ride.destination_city_key,
       ride.departure_at,
       ride.available_seats,
+      ride.driver_id,
     ],
   );
   const requestIds = result.rows.map((row) => row.request_id);
@@ -406,12 +426,14 @@ export function createIntercityRidesRouter({
         matchedRequests.map((match) => ({
           firebaseUid: match.firebaseUid,
           payload: {
-            title: 'TULPAR',
+            title: 'MEKEN',
             body: `Появилась попутка ${v.originCity} → ${v.destinationCity}`,
             data: {
               type: 'intercity_ride_match_available',
               rideId: result.rows[0].id,
               requestId: match.requestId,
+              originCity: v.originCity,
+              destinationCity: v.destinationCity,
             },
           },
         })),
@@ -446,8 +468,14 @@ export function createIntercityRidesRouter({
            AND r.departure_at >= $3 AND r.departure_at < $4
            AND r.departure_at > now() AND r.status='scheduled'
            AND r.available_seats >= $5
+           AND NOT EXISTS (
+             SELECT 1 FROM users viewer JOIN user_blocks ub
+               ON (ub.blocker_user_id = viewer.id AND ub.blocked_user_id = r.driver_id)
+               OR (ub.blocker_user_id = r.driver_id AND ub.blocked_user_id = viewer.id)
+             WHERE viewer.firebase_uid = $6 OR viewer.id::text = $6
+           )
          ORDER BY r.departure_at, r.id`,
-        [v.originCityKey, v.destinationCityKey, v.start, v.end, v.seats],
+        [v.originCityKey, v.destinationCityKey, v.start, v.end, v.seats, req.user.uid],
       );
       res.json({ rides: result.rows.map(publicRide) });
     } catch (e) {
@@ -542,12 +570,14 @@ export function createIntercityRidesRouter({
         matchedRideIds.map((matchedRideId) => ({
           firebaseUid: req.user.uid,
           payload: {
-            title: 'TULPAR',
+            title: 'MEKEN',
             body: `Появилась попутка ${v.originCity} → ${v.destinationCity}`,
             data: {
               type: 'intercity_ride_match_available',
               rideId: matchedRideId,
               requestId: inserted.rows[0].id,
+              originCity: v.originCity,
+              destinationCity: v.destinationCity,
             },
           },
         })),
@@ -772,7 +802,7 @@ export function createIntercityRidesRouter({
       );
       await client.query('COMMIT');
       await sendIntercityPush(sendPushToUser, ride.driver_firebase_uid, {
-        title: 'TULPAR',
+        title: 'MEKEN',
         body: 'Пассажир отменил бронирование',
         data: {
           type: 'intercity_booking_cancelled',
@@ -867,6 +897,10 @@ export function createIntercityRidesRouter({
         await client.query('ROLLBACK');
         return error(res, 403, 'Drivers cannot book their own ride');
       }
+      if (await areUsersBlocked(client, passenger.id, ride.driver_id)) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ code: 'user_blocked', error: 'Future booking is blocked' });
+      }
       if (
         ride.status !== 'scheduled'
         || new Date(ride.departure_at) <= new Date()
@@ -951,12 +985,13 @@ export function createIntercityRidesRouter({
       );
       await client.query('COMMIT');
       await sendIntercityPush(sendPushToUser, ride.driver_firebase_uid, {
-        title: 'TULPAR',
+        title: 'MEKEN',
         body: `Пассажир забронировал ${checked.value.seats} ${seatsLabel(checked.value.seats)}`,
         data: {
-          type: 'intercity_ride_booked',
+          type: 'intercity_booking_created',
           rideId: ride.id,
           bookingId: inserted.rows[0].id,
+          seats: checked.value.seats,
         },
       });
       return res.status(201).json({
@@ -997,6 +1032,46 @@ export function createIntercityRidesRouter({
     } catch (e) {
       console.error('[IntercityRideBookingsDriver]', e);
       return error(res, 500, 'Failed to load ride bookings');
+    }
+  });
+
+  router.post('/:rideId/bookings/:bookingId/pickup-reached', async (req, res) => {
+    if (!isUuid(req.params.rideId) || !isUuid(req.params.bookingId)) {
+      return error(res, 400, 'Invalid rideId or bookingId');
+    }
+    try {
+      const driver = await loadAuthenticatedUser(pool, req.user.uid);
+      if (!driver) return error(res, 403, 'Registered user is required');
+      const updated = await pool.query(
+        `UPDATE intercity_ride_bookings b
+         SET pickup_reached_at = COALESCE(b.pickup_reached_at, now()),
+             updated_at = now()
+         FROM intercity_rides r
+         WHERE b.id = $1
+           AND b.ride_id = $2
+           AND r.id = b.ride_id
+           AND r.driver_id = $3
+           AND r.status = 'departed'
+           AND b.status = 'confirmed'
+           AND b.pickup_address IS NOT NULL
+           AND b.pickup_lat IS NOT NULL
+           AND b.pickup_lng IS NOT NULL
+         RETURNING b.id`,
+        [req.params.bookingId, req.params.rideId, driver.id],
+      );
+      if (!updated.rows[0]) {
+        return error(res, 409, 'Pickup cannot be marked reached');
+      }
+      const result = await pool.query(
+        `${selectBooking} WHERE b.id = $1`,
+        [req.params.bookingId],
+      );
+      return res.json({
+        booking: publicBooking(result.rows[0], { viewer: 'driver' }),
+      });
+    } catch (e) {
+      console.error('[IntercityPickupReached]', e);
+      return error(res, 500, 'Failed to mark pickup reached');
     }
   });
 
@@ -1183,7 +1258,7 @@ export function createIntercityRidesRouter({
         }
 
         let passengerRecipients = [];
-        if (action === 'cancel' || action === 'depart') {
+        if (action === 'cancel' || action === 'depart' || action === 'complete') {
           const recipients = await client.query(
             `SELECT b.id AS booking_id,
                 COALESCE(u.firebase_uid, u.id::text) AS passenger_firebase_uid
@@ -1224,19 +1299,23 @@ export function createIntercityRidesRouter({
           [to, ride.id],
         );
         await client.query('COMMIT');
-        if (action === 'cancel' || action === 'depart') {
+        if (action === 'cancel' || action === 'depart' || action === 'complete') {
           const eventType = action === 'cancel'
             ? 'intercity_ride_cancelled'
-            : 'intercity_ride_departed';
+            : action === 'depart'
+            ? 'intercity_trip_started'
+            : 'intercity_trip_completed';
           const body = action === 'cancel'
             ? 'Водитель отменил попутку'
-            : 'Попутка отправилась';
+            : action === 'depart'
+            ? 'Попутка отправилась'
+            : 'Междугородняя поездка завершена';
           await sendIntercityPushes(
             sendPushToUser,
             passengerRecipients.map((recipient) => ({
               firebaseUid: recipient.passenger_firebase_uid,
               payload: {
-                title: 'TULPAR',
+                title: 'MEKEN',
                 body,
                 data: {
                   type: eventType,

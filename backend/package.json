@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
+    "admin:moderation": "node scripts/set-moderation-admin.js",
+    "admin:review-accounts": "node scripts/provision-review-accounts.js",
     "test": "node --test --test-isolation=none test/*.test.js",
     "test:integration:intercity:prepare": "node integration-test/prepare-intercity-test-db.js",
     "test:integration:intercity": "node --test --test-concurrency=1 --test-isolation=none integration-test/intercity-rides.postgres.test.js"
@@ -12,7 +14,7 @@
   "dependencies": {
     "express": "^5.1.0",
     "express-rate-limit": "^8.6.2",
-    "firebase-admin": "^13.0.0",
+    "firebase-admin": "^14.5.0",
     "helmet": "^8.3.0",
     "pg": "^8.16.0",
     "ws": "^8.18.0"

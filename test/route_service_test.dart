@@ -140,4 +140,24 @@ void main() {
     final source = File('lib/services/route_service.dart').readAsStringSync();
     expect(source, isNot(contains('router.project-osrm.org')));
   });
+
+  test('route endpoint diagnostics expose a wrong final destination', () {
+    final correct = RouteEndpointDiagnostics.fromRoute(
+      geometry: const [LatLng(51.95968734, 66.40240018)],
+      expectedStart: const LatLng(51.95968734, 66.40240018),
+      expectedDestination: const LatLng(51.95968734, 66.40240018),
+    );
+    expect(correct.destinationWithinTolerance, isTrue);
+
+    final wrong = RouteEndpointDiagnostics.fromRoute(
+      geometry: const [
+        LatLng(51.95968734, 66.40240018),
+        LatLng(51.9500309, 66.40547848),
+      ],
+      expectedStart: const LatLng(51.95968734, 66.40240018),
+      expectedDestination: const LatLng(51.95121664, 66.39730188),
+    );
+    expect(wrong.destinationWithinTolerance, isFalse);
+    expect(wrong.destinationDistanceMeters, greaterThan(250));
+  });
 }

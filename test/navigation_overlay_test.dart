@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:taxi_esil/models/navigation_step.dart';
 import 'package:taxi_esil/widgets/navigation_overlay.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 NavigationStep step({
   String type = 'turn',
@@ -34,8 +35,12 @@ Widget app({
   bool isRerouting = false,
   String? rerouteErrorMessage,
   LatLng? routeTarget,
+  Locale locale = const Locale('ru'),
 }) => MaterialApp(
   theme: theme,
+  locale: locale,
+  localizationsDelegates: AppLocalizations.localizationsDelegates,
+  supportedLocales: AppLocalizations.supportedLocales,
   home: Scaffold(
     body: Stack(
       children: [
@@ -57,6 +62,28 @@ Widget app({
 );
 
 void main() {
+  testWidgets('localizes structured maneuver text in Kazakh and English', (
+    tester,
+  ) async {
+    final position = ValueNotifier<LatLng?>(const LatLng(51.947, 66.4));
+    for (final entry in const [
+      (Locale('kk'), 'Оңға бұрылыңыз'),
+      (Locale('en'), 'Turn right'),
+    ]) {
+      await tester.pumpWidget(
+        app(
+          theme: ThemeData.light(),
+          steps: [step()],
+          position: position,
+          locale: entry.$1,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text(entry.$2), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
   testWidgets('uses light and dark ColorScheme', (tester) async {
     final position = ValueNotifier<LatLng?>(const LatLng(51.947, 66.4));
     final lightScheme = ColorScheme.fromSeed(seedColor: Colors.amber);
@@ -340,7 +367,7 @@ void main() {
         isRerouting: true,
       ),
     );
-    expect(find.text('Перестраиваем маршрут…'), findsOneWidget);
+    expect(find.text('Перестраиваем маршрут...'), findsOneWidget);
 
     await tester.pumpWidget(
       app(

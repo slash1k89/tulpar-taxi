@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:mask_text_input_formatter/mask_text_input_formatter.dart';
 
 import '../../services/auth_service.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -70,20 +71,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
       }
 
       if (mounted) {
+        final l10n = AppLocalizations.of(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Пользователь зарегистрирован: +$fullPhone'),
+            content: Text(l10n.registrationSuccess('+$fullPhone')),
             backgroundColor: Colors.green,
           ),
         );
         // Возвращаем пользователя на экран входа после успеха
         Navigator.pop(context);
       }
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Ошибка: $e'),
+            content: Text(AppLocalizations.of(context).registerUnexpectedError),
             backgroundColor: Colors.redAccent,
           ),
         );
@@ -96,11 +98,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
 
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       appBar: AppBar(
-        title: const Text('Регистрация'),
+        title: Text(l10n.registerTitle),
         backgroundColor: Colors.black,
         elevation: 0,
       ),
@@ -117,8 +120,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text(
-                    'Создание аккаунта',
+                  Text(
+                    l10n.createAccount,
                     style: TextStyle(
                       fontSize: 26,
                       fontWeight: FontWeight.bold,
@@ -136,7 +139,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     cursorColor: colorScheme.primary,
                     cursorErrorColor: colorScheme.error,
                     decoration: InputDecoration(
-                      labelText: 'Имя',
+                      labelText: l10n.nameLabel,
                       labelStyle: TextStyle(
                         color: colorScheme.onSurfaceVariant,
                       ),
@@ -162,10 +165,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     ),
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
-                        return 'Введите имя';
+                        return l10n.enterName;
                       }
                       if (value.trim().length > 80) {
-                        return 'Имя слишком длинное';
+                        return l10n.nameTooLong;
                       }
                       return null;
                     },
@@ -182,7 +185,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     cursorColor: colorScheme.primary,
                     cursorErrorColor: colorScheme.error,
                     decoration: InputDecoration(
-                      labelText: 'Номер телефона',
+                      labelText: l10n.phoneNumber,
                       labelStyle: TextStyle(
                         color: colorScheme.onSurfaceVariant,
                       ),
@@ -218,10 +221,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     validator: (value) {
                       String unmasked = _phoneFormatter.getUnmaskedText();
                       if (unmasked.isEmpty) {
-                        return 'Введите номер телефона';
+                        return l10n.enterPhone;
                       }
                       if (unmasked.length < 10) {
-                        return 'Введите номер полностью';
+                        return l10n.enterFullPhone;
                       }
                       return null;
                     },
@@ -237,7 +240,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     cursorColor: colorScheme.primary,
                     cursorErrorColor: colorScheme.error,
                     decoration: InputDecoration(
-                      labelText: 'Пароль',
+                      labelText: l10n.passwordLabel,
                       labelStyle: TextStyle(
                         color: colorScheme.onSurfaceVariant,
                       ),
@@ -287,10 +290,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     ),
                     validator: (value) {
                       if (value == null || value.isEmpty) {
-                        return 'Введите пароль';
+                        return l10n.enterPassword;
                       }
                       if (value.length < 6) {
-                        return 'Пароль должен содержать минимум 6 символов';
+                        return l10n.shortPassword;
                       }
                       return null;
                     },
@@ -306,7 +309,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     cursorColor: colorScheme.primary,
                     cursorErrorColor: colorScheme.error,
                     decoration: InputDecoration(
-                      labelText: 'Повторите пароль',
+                      labelText: l10n.confirmPassword,
                       labelStyle: TextStyle(
                         color: colorScheme.onSurfaceVariant,
                       ),
@@ -354,10 +357,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     ),
                     validator: (value) {
                       if (value == null || value.isEmpty) {
-                        return 'Повторите пароль';
+                        return l10n.confirmPassword;
                       }
                       if (value != _passwordController.text) {
-                        return 'Пароли не совпадают';
+                        return l10n.passwordMismatch;
                       }
                       return null;
                     },
@@ -378,9 +381,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                       child: _isLoading
                           ? const CircularProgressIndicator(color: Colors.black)
-                          : const Text(
-                              'Зарегистрироваться',
-                              style: TextStyle(
+                          : Text(
+                              l10n.registerButton,
+                              style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
                               ),

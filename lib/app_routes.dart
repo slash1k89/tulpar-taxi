@@ -17,5 +17,6 @@ class AppRoutes {
   static const driverOnboarding = '/driver-onboarding';
   static const history = '/history';
   static const profile = '/profile';
+  static const aboutSupport = '/about-support';
   static const login = '/login';
 }

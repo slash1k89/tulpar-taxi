@@ -107,7 +107,7 @@ test('passenger assigned profile contains role-scoped rating, reviews, no privat
   const res = await request(h.app).get(`/api/orders/${orderId}/driver-profile`).expect(200);
   assert.equal(res.body.averageRating, 4);
   assert.equal(res.body.ratingsCount, 2);
-  assert.deepEqual(Object.keys(res.body).sort(), ['averageRating','carColor','carModel','carNumber','name','ratingsCount','reviews'].sort());
+  assert.deepEqual(Object.keys(res.body).sort(), ['averageRating','carColor','carModel','carNumber','driverId','name','ratingsCount','reviews'].sort());
   assert.deepEqual(res.body.reviews, [{ score: 5, comment: 'Быстро', createdAt: '2026-09-03T00:00:00Z' }]);
 });
 for (const options of [{ caller: 'other' }, { caller: 'driver' }, { assigned: false }, { status: 'searching' }, { status: 'cancelled' }]) {

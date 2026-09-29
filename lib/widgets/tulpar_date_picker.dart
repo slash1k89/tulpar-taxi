@@ -1,21 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
-const _monthNames = <String>[
-  'Январь',
-  'Февраль',
-  'Март',
-  'Апрель',
-  'Май',
-  'Июнь',
-  'Июль',
-  'Август',
-  'Сентябрь',
-  'Октябрь',
-  'Ноябрь',
-  'Декабрь',
-];
-
-const _weekdayNames = <String>['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+import '../l10n/generated/app_localizations.dart';
 
 Future<DateTime?> showTulparDatePicker({
   required BuildContext context,
@@ -123,6 +109,7 @@ class _TulparDatePickerState extends State<TulparDatePicker> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final locale = Localizations.localeOf(context).toString();
 
     return Center(
       heightFactor: 1,
@@ -150,14 +137,13 @@ class _TulparDatePickerState extends State<TulparDatePicker> {
                 children: [
                   IconButton(
                     key: const Key('tulpar_date_previous_month'),
-                    tooltip: 'Предыдущий месяц',
+                    tooltip: AppLocalizations.of(context).datePreviousMonth,
                     onPressed: _canGoPrevious ? () => _changeMonth(-1) : null,
                     icon: const Icon(Icons.chevron_left),
                   ),
                   Expanded(
                     child: Text(
-                      '${_monthNames[_displayedMonth.month - 1]} '
-                      '${_displayedMonth.year}',
+                      DateFormat.yMMMM(locale).format(_displayedMonth),
                       key: const Key('tulpar_date_month'),
                       textAlign: TextAlign.center,
                       style: theme.textTheme.titleLarge,
@@ -165,7 +151,7 @@ class _TulparDatePickerState extends State<TulparDatePicker> {
                   ),
                   IconButton(
                     key: const Key('tulpar_date_next_month'),
-                    tooltip: 'Следующий месяц',
+                    tooltip: AppLocalizations.of(context).dateNextMonth,
                     onPressed: _canGoNext ? () => _changeMonth(1) : null,
                     icon: const Icon(Icons.chevron_right),
                   ),
@@ -173,19 +159,25 @@ class _TulparDatePickerState extends State<TulparDatePicker> {
               ),
               const SizedBox(height: 8),
               Row(
-                children: _weekdayNames
-                    .map(
-                      (name) => Expanded(
-                        child: Text(
-                          name,
-                          textAlign: TextAlign.center,
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            color: colors.onSurfaceVariant,
+                children:
+                    List.generate(
+                          7,
+                          (index) => DateFormat.E(
+                            locale,
+                          ).format(DateTime(2024, 1, index + 1)),
+                        )
+                        .map(
+                          (name) => Expanded(
+                            child: Text(
+                              name,
+                              textAlign: TextAlign.center,
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                color: colors.onSurfaceVariant,
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                    )
-                    .toList(growable: false),
+                        )
+                        .toList(growable: false),
               ),
               const SizedBox(height: 4),
               _MonthGrid(
@@ -202,7 +194,7 @@ class _TulparDatePickerState extends State<TulparDatePicker> {
                     child: TextButton(
                       key: const Key('tulpar_date_cancel'),
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('Отмена'),
+                      child: Text(AppLocalizations.of(context).cancel),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -215,7 +207,7 @@ class _TulparDatePickerState extends State<TulparDatePicker> {
                               DateUtils.dateOnly(_selectedDate),
                             )
                           : null,
-                      child: const Text('Готово'),
+                      child: Text(AppLocalizations.of(context).dateDone),
                     ),
                   ),
                 ],

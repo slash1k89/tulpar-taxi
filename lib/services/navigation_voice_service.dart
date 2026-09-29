@@ -5,7 +5,10 @@ import 'package:flutter_tts/flutter_tts.dart';
 
 import '../models/navigation_step.dart';
 import '../utils/navigation_instruction_formatter.dart';
+import '../l10n/generated/app_localizations.dart';
+import 'locale_controller.dart';
 import 'navigation_audio_service.dart';
+import 'voice_asset_service.dart';
 
 abstract interface class NavigationVoiceSpeaker
     implements NavigationFallbackSpeaker {}
@@ -16,14 +19,24 @@ class SystemNavigationVoiceSpeaker implements NavigationVoiceSpeaker {
   final FlutterTts _tts;
   bool _initialized = false;
   bool _available = false;
+  String? _language;
 
   Future<bool> _initialize() async {
-    if (_initialized) return _available;
-    _initialized = true;
+    final language = switch (appLocaleController.effectiveLocale.languageCode) {
+      'kk' => 'kk-KZ',
+      'en' => 'en-US',
+      _ => 'ru-RU',
+    };
+    if (_initialized && _language == language) return _available;
     try {
-      final available = await _tts.isLanguageAvailable('ru-RU');
-      if (available != true && available != 1) return false;
-      await _tts.setLanguage('ru-RU');
+      final available = await _tts.isLanguageAvailable(language);
+      if (available != true && available != 1) {
+        _initialized = true;
+        _language = language;
+        _available = false;
+        return false;
+      }
+      await _tts.setLanguage(language);
       await _tts.setSpeechRate(0.5);
       await _tts.setVolume(1);
       await _tts.setPitch(1);
@@ -32,6 +45,8 @@ class SystemNavigationVoiceSpeaker implements NavigationVoiceSpeaker {
     } catch (_) {
       // Visual navigation remains available when the system TTS is missing.
     }
+    _initialized = true;
+    _language = language;
     return _available;
   }
 
@@ -205,9 +220,13 @@ NavigationAudioCue navigationAudioCue(
   final modifier = _normalizeManeuver(step.modifier);
 
   if (type == 'arrive') {
-    return const NavigationAudioCue(
-      assetPaths: ['$_navigationAudioPrefix/route_finish.mp3'],
-      fallbackText: 'Вы прибыли в точку назначения.',
+    return NavigationAudioCue(
+      assetPaths: [
+        localizedVoiceAssetPath('$_navigationAudioPrefix/route_finish.mp3'),
+      ],
+      fallbackText: lookupAppLocalizations(
+        appLocaleController.effectiveLocale,
+      ).navArrived,
     );
   }
 

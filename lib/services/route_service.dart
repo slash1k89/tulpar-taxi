@@ -17,6 +17,52 @@ class RouteResult {
   final double durationSeconds;
 }
 
+class RouteEndpointDiagnostics {
+  const RouteEndpointDiagnostics({
+    required this.startDistanceMeters,
+    required this.destinationDistanceMeters,
+    this.maximumSnapDistanceMeters = 250,
+  });
+
+  factory RouteEndpointDiagnostics.fromRoute({
+    required List<LatLng> geometry,
+    required LatLng expectedStart,
+    required LatLng expectedDestination,
+    double maximumSnapDistanceMeters = 250,
+  }) {
+    if (geometry.isEmpty) {
+      return RouteEndpointDiagnostics(
+        startDistanceMeters: double.infinity,
+        destinationDistanceMeters: double.infinity,
+        maximumSnapDistanceMeters: maximumSnapDistanceMeters,
+      );
+    }
+    const distance = Distance();
+    return RouteEndpointDiagnostics(
+      startDistanceMeters: distance.as(
+        LengthUnit.Meter,
+        expectedStart,
+        geometry.first,
+      ),
+      destinationDistanceMeters: distance.as(
+        LengthUnit.Meter,
+        expectedDestination,
+        geometry.last,
+      ),
+      maximumSnapDistanceMeters: maximumSnapDistanceMeters,
+    );
+  }
+
+  final double startDistanceMeters;
+  final double destinationDistanceMeters;
+  final double maximumSnapDistanceMeters;
+
+  bool get startWithinTolerance =>
+      startDistanceMeters <= maximumSnapDistanceMeters;
+  bool get destinationWithinTolerance =>
+      destinationDistanceMeters <= maximumSnapDistanceMeters;
+}
+
 class RouteService {
   static TulparApiClient apiClient = TulparApiClient();
   static String? _cachedKey;
@@ -27,8 +73,12 @@ class RouteService {
     required double startLng,
     required double destLat,
     required double destLng,
+    List<LatLng> intermediatePoints = const [],
   }) {
-    final key = '$startLat,$startLng;$destLat,$destLng';
+    final viaKey = intermediatePoints
+        .map((point) => '${point.latitude},${point.longitude}')
+        .join(';');
+    final key = '$startLat,$startLng;$viaKey;$destLat,$destLng';
     if (_cachedKey == key && _cachedRoute != null) return _cachedRoute!;
     _cachedKey = key;
     return _cachedRoute = apiClient
@@ -37,6 +87,7 @@ class RouteService {
           startLng: startLng,
           destLat: destLat,
           destLng: destLng,
+          intermediatePoints: intermediatePoints,
         )
         .then(parseRouteResponse)
         .catchError((Object error) {
@@ -106,10 +157,12 @@ class RouteService {
     required double startLng,
     required double destLat,
     required double destLng,
+    List<LatLng> intermediatePoints = const [],
   }) async => (await fetchRoute(
     startLat: startLat,
     startLng: startLng,
     destLat: destLat,
     destLng: destLng,
+    intermediatePoints: intermediatePoints,
   )).geometry;
 }

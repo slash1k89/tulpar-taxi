@@ -97,6 +97,29 @@ test('valid coordinates return stable Tulpar route response and lng,lat upstream
   assert.equal(calledUrl.searchParams.get('overview'), 'full');
 });
 
+test('intermediate waypoints are sent to OSRM in the supplied order', async () => {
+  let calledUrl;
+  const app = createApp(async (url) => {
+    calledUrl = url;
+    return jsonResponse(osrmBody);
+  });
+  const response = await request(app).get('/api/routing/route').query({
+    ...validQuery,
+    waypoints: '66.405,51.956;66.407,51.958',
+  });
+  assert.equal(response.status, 200);
+  assert.match(calledUrl.pathname, /66\.4042,51\.9555;66\.405,51\.956;66\.407,51\.958;66\.41,51\.96$/);
+});
+
+test('more than three intermediate waypoints are rejected', async () => {
+  const app = createApp(async () => jsonResponse(osrmBody));
+  const response = await request(app).get('/api/routing/route').query({
+    ...validQuery,
+    waypoints: '1,1;2,2;3,3;4,4',
+  });
+  assert.equal(response.status, 400);
+});
+
 test('trailing slashes are removed before building the OSRM route URL', async () => {
   let calledUrl;
   const app = createApp(async (url) => {

@@ -46,6 +46,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '416483778124',
     projectId: 'taxi-esil',
     authDomain: 'taxi-esil.firebaseapp.com',
+    databaseURL: 'https://taxi-esil-default-rtdb.firebaseio.com',
     storageBucket: 'taxi-esil.firebasestorage.app',
     measurementId: 'G-9PKB69CTPR',
   );
@@ -55,6 +56,7 @@ class DefaultFirebaseOptions {
     appId: '1:416483778124:android:82418192851dc65ca41ee9',
     messagingSenderId: '416483778124',
     projectId: 'taxi-esil',
+    databaseURL: 'https://taxi-esil-default-rtdb.firebaseio.com',
     storageBucket: 'taxi-esil.firebasestorage.app',
   );
   static const FirebaseOptions ios = FirebaseOptions(
@@ -62,6 +64,7 @@ class DefaultFirebaseOptions {
     appId: '1:416483778124:ios:82747d59e6d9c2cda41ee9',
     messagingSenderId: '416483778124',
     projectId: 'taxi-esil',
+    databaseURL: 'https://taxi-esil-default-rtdb.firebaseio.com',
     storageBucket: 'taxi-esil.firebasestorage.app',
     iosBundleId: 'com.example.taxiEsil',
   );
@@ -70,6 +73,7 @@ class DefaultFirebaseOptions {
     appId: '1:416483778124:ios:82747d59e6d9c2cda41ee9',
     messagingSenderId: '416483778124',
     projectId: 'taxi-esil',
+    databaseURL: 'https://taxi-esil-default-rtdb.firebaseio.com',
     storageBucket: 'taxi-esil.firebasestorage.app',
     iosBundleId: 'com.example.taxiEsil',
   );
@@ -80,6 +84,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '416483778124',
     projectId: 'taxi-esil',
     authDomain: 'taxi-esil.firebaseapp.com',
+    databaseURL: 'https://taxi-esil-default-rtdb.firebaseio.com',
     storageBucket: 'taxi-esil.firebasestorage.app',
     measurementId: 'G-N8RLSNTYW4',
   );

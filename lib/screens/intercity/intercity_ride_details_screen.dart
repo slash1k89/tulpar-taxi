@@ -1,12 +1,15 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 import '../../app_routes.dart';
 import '../../models/intercity_ride.dart';
 import '../../models/intercity_ride_booking.dart';
 import '../../models/intercity_pickup_draft.dart';
 import '../../services/geocoding_service.dart';
+import '../../services/address_label_service.dart';
 import '../../services/intercity_ride_service.dart';
 import '../../services/tulpar_api_client.dart';
 import '../../utils/intercity_ride_formatters.dart';
@@ -14,6 +17,13 @@ import '../../widgets/intercity_ride_fields.dart';
 import '../../widgets/intercity_pickup_field.dart';
 
 class IntercityRideDetailsScreen extends StatefulWidget {
+  static final Set<_IntercityRideDetailsScreenState> _visibleStates = {};
+  static bool isCurrentRide(String rideId) => _visibleStates.any(
+    (state) =>
+        state.mounted &&
+        (state.widget.rideId ?? state.widget.ride?.rideId) == rideId &&
+        ModalRoute.of(state.context)?.isCurrent == true,
+  );
   const IntercityRideDetailsScreen({
     super.key,
     this.ride,
@@ -55,6 +65,7 @@ class _IntercityRideDetailsScreenState
   @override
   void initState() {
     super.initState();
+    IntercityRideDetailsScreen._visibleStates.add(this);
     _repository = widget.repository ?? IntercityRideService();
     _ride = widget.ride;
     _seats = widget.initialSeats.clamp(1, 7);
@@ -67,6 +78,7 @@ class _IntercityRideDetailsScreenState
 
   @override
   void dispose() {
+    IntercityRideDetailsScreen._visibleStates.remove(this);
     _passengerCommentController.dispose();
     super.dispose();
   }
@@ -98,7 +110,9 @@ class _IntercityRideDetailsScreenState
     if (settlement == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Не удалось определить город посадки.')),
+          SnackBar(
+            content: Text(AppLocalizations.of(context).bookingPickupCityFailed),
+          ),
         );
       }
       return;
@@ -154,15 +168,17 @@ class _IntercityRideDetailsScreenState
   Future<void> _confirmAndBook() async {
     if (_booking || _confirmationOpen || _ride == null) return;
     if (_submissionPickup == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Выберите точку посадки.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(AppLocalizations.of(context).bookingSelectPickup),
+        ),
+      );
       return;
     }
     if (_passengerCommentController.text.trim().length > 1000) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Комментарий не должен превышать 1000 символов.'),
+        SnackBar(
+          content: Text(AppLocalizations.of(context).bookingCommentLimit),
         ),
       );
       return;
@@ -173,21 +189,26 @@ class _IntercityRideDetailsScreenState
       confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Подтвердить бронирование?'),
+          title: Text(AppLocalizations.of(context).bookingConfirmTitle),
           content: Text(
-            '$_seats ${_seatWord(_seats)} · '
-            '${formatTenge(_ride!.pricePerSeat * _seats)}\n'
-            '${_submissionPickup!.address}',
+            AppLocalizations.of(context).bookingConfirmSummary(
+              AppLocalizations.of(context).bookingSeats(_seats),
+              formatTenge(_ride!.pricePerSeat * _seats),
+              AddressLabelService.format(
+                _submissionPickup!.address,
+                Localizations.localeOf(context),
+              ),
+            ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('Назад'),
+              child: Text(AppLocalizations.of(context).bookingBack),
             ),
             ElevatedButton(
               key: const Key('intercity_booking_confirm'),
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Забронировать'),
+              child: Text(AppLocalizations.of(context).bookingBook),
             ),
           ],
         ),
@@ -232,17 +253,17 @@ class _IntercityRideDetailsScreenState
       final openBookings = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Место забронировано'),
-          content: const Text('Бронь сохранена в разделе «Мои бронирования».'),
+          title: Text(AppLocalizations.of(context).bookingBooked),
+          content: Text(AppLocalizations.of(context).bookingSavedBody),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('Остаться'),
+              child: Text(AppLocalizations.of(context).bookingStay),
             ),
             ElevatedButton(
               key: const Key('intercity_open_bookings'),
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Мои бронирования'),
+              child: Text(AppLocalizations.of(context).intercityMyBookings),
             ),
           ],
         ),
@@ -252,7 +273,12 @@ class _IntercityRideDetailsScreenState
       }
     } catch (error) {
       if (!mounted) return;
-      setState(() => _bookingError = _bookingMessage(error));
+      setState(
+        () => _bookingError = _bookingMessage(
+          error,
+          AppLocalizations.of(context),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _booking = false);
     }
@@ -262,22 +288,22 @@ class _IntercityRideDetailsScreenState
   Widget build(BuildContext context) {
     if (_loading) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Поездка')),
+        appBar: AppBar(title: Text(AppLocalizations.of(context).bookingRide)),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
     if (_loadError != null || _ride == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Поездка')),
+        appBar: AppBar(title: Text(AppLocalizations.of(context).bookingRide)),
         body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('Не удалось загрузить поездку'),
+              Text(AppLocalizations.of(context).bookingLoadRideFailed),
               const SizedBox(height: 12),
               ElevatedButton(
                 onPressed: _loadRide,
-                child: const Text('Повторить'),
+                child: Text(AppLocalizations.of(context).retry),
               ),
             ],
           ),
@@ -293,7 +319,7 @@ class _IntercityRideDetailsScreenState
     final total = ride.pricePerSeat * _seats;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Поездка')),
+      appBar: AppBar(title: Text(AppLocalizations.of(context).bookingRide)),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -307,19 +333,26 @@ class _IntercityRideDetailsScreenState
             const SizedBox(height: 16),
             _DetailRow(
               icon: Icons.calendar_today_outlined,
-              text:
-                  '${formatIntercityRideDate(ride.departureAt)}, '
-                  '${formatIntercityRideTime(ride.departureAt)}',
+              text: ride.departureAt == null
+                  ? AppLocalizations.of(context).driverRideDate
+                  : DateFormat(
+                      'd MMMM, HH:mm',
+                      Localizations.localeOf(context).toLanguageTag(),
+                    ).format(toKazakhstanTime(ride.departureAt!)),
             ),
             if (vehicle.isNotEmpty)
               _DetailRow(icon: Icons.directions_car_outlined, text: vehicle),
             _DetailRow(
               icon: Icons.event_seat_outlined,
-              text: 'Свободно: ${ride.availableSeats} мест',
+              text: AppLocalizations.of(
+                context,
+              ).intercityAvailableSeats(ride.availableSeats),
             ),
             _DetailRow(
               icon: Icons.luggage_outlined,
-              text: ride.allowsLuggage ? 'Багаж разрешён' : 'Без багажа',
+              text: ride.allowsLuggage
+                  ? AppLocalizations.of(context).driverRideLuggageAllowed
+                  : AppLocalizations.of(context).driverRideNoLuggage,
             ),
             if (ride.comment != null)
               _DetailRow(icon: Icons.notes_outlined, text: ride.comment!),
@@ -336,10 +369,10 @@ class _IntercityRideDetailsScreenState
               enabled: !_booking,
               maxLength: 1000,
               maxLines: 3,
-              decoration: const InputDecoration(
-                labelText: 'Комментарий водителю (необязательно)',
-                hintText: 'Например, подъедьте к главному входу',
-                prefixIcon: Icon(Icons.notes_outlined),
+              decoration: InputDecoration(
+                labelText: AppLocalizations.of(context).requestCommentLabel,
+                hintText: AppLocalizations.of(context).requestCommentHint,
+                prefixIcon: const Icon(Icons.notes_outlined),
               ),
             ),
             const SizedBox(height: 8),
@@ -355,7 +388,7 @@ class _IntercityRideDetailsScreenState
             ),
             const SizedBox(height: 4),
             Text(
-              'Итого: ${formatTenge(total)}',
+              AppLocalizations.of(context).bookingTotal(formatTenge(total)),
               key: const Key('intercity_booking_total'),
               style: Theme.of(
                 context,
@@ -371,8 +404,8 @@ class _IntercityRideDetailsScreenState
             ],
             if (_bookingResult != null) ...[
               const SizedBox(height: 12),
-              const Text(
-                'Место забронировано',
+              Text(
+                AppLocalizations.of(context).bookingBooked,
                 key: Key('intercity_booking_success'),
               ),
             ],
@@ -389,7 +422,9 @@ class _IntercityRideDetailsScreenState
                         dimension: 22,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : Text('Забронировать $_seats ${_seatWord(_seats)}'),
+                    : Text(
+                        AppLocalizations.of(context).bookingBookSeats(_seats),
+                      ),
               ),
             ),
           ],
@@ -425,24 +460,18 @@ class _DetailRow extends StatelessWidget {
   );
 }
 
-String _seatWord(int seats) {
-  if (seats == 1) return 'место';
-  if (seats >= 2 && seats <= 4) return 'места';
-  return 'мест';
-}
-
-String _bookingMessage(Object error) {
+String _bookingMessage(Object error, AppLocalizations l10n) {
   if (error is TulparApiException) {
     if (error.statusCode == 409) {
-      return 'Поездка изменилась или свободных мест уже недостаточно.';
+      return l10n.bookingRideChanged;
     }
     if (error.statusCode == 401 || error.statusCode == 403) {
-      return 'Необходимо войти в аккаунт и повторить попытку.';
+      return l10n.bookingLogin;
     }
-    return error.message;
+    return l10n.bookingFailed;
   }
   if (error is TimeoutException) {
-    return 'Сервер не ответил. Повторите попытку.';
+    return l10n.bookingServerTimeout;
   }
-  return 'Не удалось забронировать место. Повторите попытку.';
+  return l10n.bookingFailed;
 }

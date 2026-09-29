@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../app_routes.dart';
 import '../../models/order_service_type.dart';
 import '../../widgets/app_drawer.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 class IntercityModeScreen extends StatelessWidget {
   const IntercityModeScreen({
@@ -28,7 +29,7 @@ class IntercityModeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Межгород')),
+    appBar: AppBar(title: Text(AppLocalizations.of(context).serviceIntercity)),
     drawer: const AppDrawer(
       mode: AppMode.passenger,
       selectedServiceType: OrderServiceType.intercity,
@@ -40,8 +41,8 @@ class IntercityModeScreen extends StatelessWidget {
           _ModeCard(
             key: const Key('intercity_order_mode'),
             icon: Icons.directions_car_filled_outlined,
-            title: 'Заказать машину',
-            subtitle: 'Машина целиком до нужного адреса',
+            title: AppLocalizations.of(context).intercityOrderCar,
+            subtitle: AppLocalizations.of(context).intercityOrderCarHint,
             onTap: () => _open(
               context,
               route: AppRoutes.intercityOrder,
@@ -52,8 +53,8 @@ class IntercityModeScreen extends StatelessWidget {
           _ModeCard(
             key: const Key('intercity_rideshare_mode'),
             icon: Icons.people_alt_outlined,
-            title: 'Найти попутку',
-            subtitle: 'Забронировать место в поездке водителя',
+            title: AppLocalizations.of(context).intercityFindRide,
+            subtitle: AppLocalizations.of(context).intercityFindRideHint,
             onTap: () => _open(
               context,
               route: AppRoutes.intercityRideSearch,
@@ -64,7 +65,7 @@ class IntercityModeScreen extends StatelessWidget {
           ListTile(
             key: const Key('intercity_my_bookings'),
             leading: const Icon(Icons.event_seat_outlined),
-            title: const Text('Мои бронирования'),
+            title: Text(AppLocalizations.of(context).intercityMyBookings),
             trailing: const Icon(Icons.chevron_right),
             onTap: () =>
                 Navigator.pushNamed(context, AppRoutes.intercityBookings),
@@ -72,7 +73,7 @@ class IntercityModeScreen extends StatelessWidget {
           ListTile(
             key: const Key('intercity_my_requests'),
             leading: const Icon(Icons.notifications_active_outlined),
-            title: const Text('Ищу попутку'),
+            title: Text(AppLocalizations.of(context).intercityLookingForRide),
             trailing: const Icon(Icons.chevron_right),
             onTap: () =>
                 Navigator.pushNamed(context, AppRoutes.intercityRequests),

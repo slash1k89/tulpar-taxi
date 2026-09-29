@@ -4,6 +4,7 @@ import 'package:taxi_esil/models/next_order.dart';
 import 'package:taxi_esil/services/next_order_candidate_controller.dart';
 import 'package:taxi_esil/services/tulpar_api_client.dart';
 import 'package:taxi_esil/widgets/next_order_candidate_card.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 NextOrderCandidate candidate(
   String id, {
@@ -82,6 +83,9 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: NextOrderCandidateCard(
             candidate: candidate('next'),
@@ -218,6 +222,9 @@ void main() {
     var offers = 0;
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: NextOrderCandidateCard(
             candidate: candidate('next'),

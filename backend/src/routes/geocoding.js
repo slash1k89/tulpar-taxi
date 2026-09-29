@@ -1,4 +1,9 @@
 import express from 'express';
+import {
+  localAddressCandidates,
+  searchCityCandidates,
+  wordPrefixMatches,
+} from '../geocoding-candidates.js';
 
 const NOMINATIM_ORIGIN = 'https://nominatim.openstreetmap.org';
 const DEFAULT_TIMEOUT_MS = 5_000;
@@ -73,6 +78,7 @@ function sendUpstreamError(res, error) {
 
 export function createGeocodingRouter({
   requireAuth,
+  pool,
   fetchImpl = globalThis.fetch,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 } = {}) {
@@ -82,7 +88,8 @@ export function createGeocodingRouter({
     const query = cleanOptional(req.query.query, MAX_QUERY_LENGTH);
     const kind = req.query.kind === 'settlement' ? 'settlement' : 'address';
     const settlement = cleanOptional(req.query.settlement, 120);
-    if (query === null || query.length < 2 || settlement === null) {
+    const cityId = cleanOptional(req.query.cityId, 40);
+    if (query === null || query.length < 2 || settlement === null || cityId === null) {
       return stableError(res, 400, 'Invalid geocoding query');
     }
 
@@ -96,6 +103,71 @@ export function createGeocodingRouter({
       : coordinate(req.query.lng, -180, 180);
     if (hasLat !== hasLng || (hasLat && (lat === null || lng === null))) {
       return stableError(res, 400, 'Invalid geocoding coordinates');
+    }
+
+    if (cityId !== null && cityId) {
+      if (kind !== 'address' || !pool) return stableError(res, 400, 'Invalid city');
+      const cityResult = await pool.query(
+        `SELECT id, slug, name_ru FROM cities WHERE slug = $1 AND is_enabled = TRUE`,
+        [cityId],
+      );
+      const city = cityResult.rows[0];
+      if (!city) return stableError(res, 400, 'Invalid city');
+      try {
+        const local = await searchCityCandidates(pool, { city, query });
+        const placesResult = await pool.query(
+          `SELECT id, name, category, address, latitude, longitude, aliases
+           FROM tulpar_places WHERE city_id = $1 AND active = TRUE`,
+          [city.id],
+        );
+        const places = placesResult.rows.filter((row) =>
+          [row.name, row.category, ...(row.aliases ?? [])]
+            .some((value) => wordPrefixMatches(value, query)))
+          .map((row) => ({
+            id: `tulpar-${row.id}`, kind: 'poi', name: row.name,
+            cityId: city.slug, cityName: city.name_ru, region: '',
+            displayName: `${row.name}${row.address ? `, ${row.address}` : ''}`,
+            lat: Number(row.latitude), lng: Number(row.longitude),
+            address: { town: city.name_ru, country_code: 'kz' },
+          }));
+        const compatibility = city.slug === 'esil' && local.length === 0
+          ? localAddressCandidates({ query, settlement: 'Есиль' }) : [];
+        return res.json({ results: [...places, ...local, ...compatibility].slice(0, 12) });
+      } catch (error) {
+        console.error('[GeocodingLocal]', error);
+        return stableError(res, 503, 'Local geocoding is unavailable');
+      }
+    }
+
+    if (kind === 'address') {
+      const local = localAddressCandidates({ query, settlement, lat, lng });
+      let places = [];
+      if (pool) {
+        try {
+          const result = await pool.query(
+            `SELECT id, name, category, address, latitude, longitude, aliases
+             FROM tulpar_places WHERE active = TRUE`,
+          );
+          places = result.rows.filter((row) =>
+            [row.name, row.category, ...(row.aliases ?? [])]
+              .some((value) => wordPrefixMatches(value, query)))
+            .map((row) => ({
+              id: `tulpar-${row.id}`,
+              kind: 'poi',
+              name: row.name,
+              region: '',
+              displayName: `${row.name}${row.address ? `, ${row.address}` : ''}`,
+              lat: Number(row.latitude),
+              lng: Number(row.longitude),
+              address: { town: settlement ?? 'Есиль', country_code: 'kz' },
+            }));
+        } catch (error) {
+          console.error('[GeocodingPlaces]', error);
+        }
+      }
+      if (places.length || local.length) {
+        return res.json({ results: [...places, ...local].slice(0, 12) });
+      }
     }
 
     const url = new URL('/search', NOMINATIM_ORIGIN);
@@ -133,6 +205,8 @@ export function createGeocodingRouter({
       if (kind === 'settlement' && !name) return [];
       return [{
         id: String(raw.place_id ?? `${itemLat},${itemLng}`),
+        kind: raw.class === 'highway' && !address.house_number
+          ? 'street' : address.house_number ? 'address' : 'poi',
         name,
         region: String(address.state ?? address.region ?? address.county ?? ''),
         displayName: String(raw.display_name ?? name),

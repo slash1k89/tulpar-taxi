@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import '/models/city.dart';
 import '/models/address_suggestion.dart';
 import '/models/order_service_type.dart';
+import '/l10n/generated/app_localizations.dart';
 import '/services/city_service.dart';
 import '/services/active_order_service.dart';
 import '/services/order_creation_service.dart';
@@ -79,6 +80,7 @@ class _MapScreenState extends State<MapScreen> {
 
   final TextEditingController _fromAddressController = TextEditingController();
   final TextEditingController _toAddressController = TextEditingController();
+  final List<_IntermediateStop> _intermediateStops = [];
   final TextEditingController _fromSettlementController =
       TextEditingController();
   final TextEditingController _toSettlementController = TextEditingController();
@@ -102,6 +104,8 @@ class _MapScreenState extends State<MapScreen> {
 
   List<AddressSuggestion> _fromSuggestions = [];
   List<AddressSuggestion> _toSuggestions = [];
+  int _fromSearchGeneration = 0;
+  int _toSearchGeneration = 0;
   final List<KazakhstanSettlement> _fromSettlementSuggestions = [];
   final List<KazakhstanSettlement> _toSettlementSuggestions = [];
   KazakhstanSettlement? _fromSettlement;
@@ -116,6 +120,7 @@ class _MapScreenState extends State<MapScreen> {
   bool _isLoadingRoute = false;
   bool _isCreatingOrder = false;
   bool _isOrderPanelExpanded = true;
+  bool _deliveryDetailsExpanded = false;
 
   @override
   void initState() {
@@ -138,7 +143,6 @@ class _MapScreenState extends State<MapScreen> {
       hour: defaultDeparture.hour,
       minute: defaultDeparture.minute,
     );
-    _applyCurrentMinimumPrice();
     unawaited(_initializeMap());
   }
 
@@ -152,29 +156,12 @@ class _MapScreenState extends State<MapScreen> {
   int? _readEnteredPrice() =>
       int.tryParse(_priceController.text.replaceAll(RegExp(r'\D'), ''));
 
-  void _applyCurrentMinimumPrice() {
-    if (widget.serviceType.isIntercity) return;
-    final proposedPrice = _readEnteredPrice() ?? 0;
-    final adjustedPrice = _orderCreationService.priceWithCurrentMinimum(
-      proposedPrice,
-    );
-    if (adjustedPrice != proposedPrice) {
-      _priceController.text = adjustedPrice.toString();
-    }
-  }
-
   String? _priceValidationMessage(int? proposedPrice) {
-    if (_serviceType == 'delivery' || _serviceType == 'intercity') {
-      if (proposedPrice == null || proposedPrice <= 0) {
-        return _serviceType == 'delivery'
-            ? 'Укажите цену доставки.'
-            : 'Укажите цену поездки.';
-      }
-      return null;
-    }
-    final minimumFare = _orderCreationService.currentMinimumFare;
-    if (proposedPrice == null || proposedPrice < minimumFare) {
-      return _orderCreationService.minimumFareMessage(minimumFare);
+    final l10n = AppLocalizations.of(context);
+    if (proposedPrice == null || proposedPrice <= 0) {
+      return _serviceType == 'delivery'
+          ? l10n.mapDeliveryPriceRequired
+          : l10n.mapTripPriceRequired;
     }
     return null;
   }
@@ -183,6 +170,9 @@ class _MapScreenState extends State<MapScreen> {
   void dispose() {
     _fromAddressController.dispose();
     _toAddressController.dispose();
+    for (final stop in _intermediateStops) {
+      stop.dispose();
+    }
     _fromSettlementController.dispose();
     _toSettlementController.dispose();
     _priceController.dispose();
@@ -251,11 +241,8 @@ class _MapScreenState extends State<MapScreen> {
       } on TimeoutException {
         if (mounted && showOutsideMessage) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Не удалось быстро определить местоположение. '
-                'Выберите адрес вручную.',
-              ),
+            SnackBar(
+              content: Text(AppLocalizations.of(context).mapLocationSlow),
             ),
           );
         }
@@ -271,7 +258,7 @@ class _MapScreenState extends State<MapScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Ваше местоположение вне города ${_selectedCity.name}.',
+              AppLocalizations.of(context).mapOutsideCity(_selectedCity.name),
             ),
           ),
         );
@@ -332,7 +319,11 @@ class _MapScreenState extends State<MapScreen> {
       _mapController.move(_selectedCity.center, _selectedCity.mapZoom);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Выберите точку в городе ${_selectedCity.name}.'),
+          content: Text(
+            AppLocalizations.of(
+              context,
+            ).mapChoosePointInCity(_selectedCity.name),
+          ),
         ),
       );
       return;
@@ -341,7 +332,9 @@ class _MapScreenState extends State<MapScreen> {
     setState(() {
       _mapCenter = point;
       _fromPoint = point;
-      _fromAddressController.text = 'Определение адреса...';
+      _fromAddressController.text = AppLocalizations.of(
+        context,
+      ).mapResolvingAddress;
       _fromSuggestions.clear();
       _routePoints.clear();
     });
@@ -358,8 +351,10 @@ class _MapScreenState extends State<MapScreen> {
           _fromAddressController.clear();
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Выберите точку на территории Казахстана.'),
+          SnackBar(
+            content: Text(
+              AppLocalizations.of(context).mapChoosePointInKazakhstan,
+            ),
           ),
         );
         return;
@@ -513,7 +508,54 @@ class _MapScreenState extends State<MapScreen> {
     if (_fromPoint != null && _toPoint != null) await _buildRoute();
   }
 
+  Future<void> _openStopPicker(int index) async {
+    final selection = await Navigator.push<MapPointSelection>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => IntercityAddressPickerScreen(
+          settlement: KazakhstanSettlement.fromCity(_selectedCity),
+          purpose: MapPointPurpose.destination,
+          search: (query, _) =>
+              widget.cityAddressSearch?.call(query, _selectedCity) ??
+              GeocodingService.searchCityAddress(
+                query: query,
+                city: _selectedCity,
+              ),
+          addressResolver: _addressResolver,
+          restrictedCity: _selectedCity,
+          cityPointValidator: widget.cityPointValidator,
+          locationProvider: widget.locationProvider,
+          showMapTiles: widget.showMapTiles,
+        ),
+      ),
+    );
+    if (!mounted || selection == null || index >= _intermediateStops.length) {
+      return;
+    }
+    setState(() {
+      _intermediateStops[index].controller.text = selection.address;
+      _intermediateStops[index].point = selection.point;
+    });
+    await _buildRoute();
+  }
+
+  void _addStop() {
+    if (_intermediateStops.length >= 3 ||
+        widget.serviceType != OrderServiceType.city) {
+      return;
+    }
+    setState(() => _intermediateStops.add(_IntermediateStop()));
+  }
+
+  void _removeStop(int index) {
+    final removed = _intermediateStops.removeAt(index);
+    removed.dispose();
+    setState(() {});
+    unawaited(_buildRoute());
+  }
+
   Widget _buildSettlementField({required bool isPickup}) {
+    final l10n = AppLocalizations.of(context);
     final controller = isPickup
         ? _fromSettlementController
         : _toSettlementController;
@@ -531,7 +573,9 @@ class _MapScreenState extends State<MapScreen> {
           onTap: () => _openSettlementPicker(isPickup: isPickup),
           child: InputDecorator(
             decoration: InputDecoration(
-              labelText: isPickup ? 'Город отправления' : 'Город назначения',
+              labelText: isPickup
+                  ? l10n.mapPickupCity
+                  : l10n.mapDestinationCity,
               prefixIcon: Icon(
                 isPickup ? Icons.my_location : Icons.location_city,
                 color: isPickup ? Colors.green : Colors.red,
@@ -540,7 +584,7 @@ class _MapScreenState extends State<MapScreen> {
               border: const OutlineInputBorder(),
             ),
             child: Text(
-              controller.text.isEmpty ? 'Выберите город' : controller.text,
+              controller.text.isEmpty ? l10n.mapChooseCity : controller.text,
             ),
           ),
         ),
@@ -584,6 +628,11 @@ class _MapScreenState extends State<MapScreen> {
     await CityService.setSelectedCity(newCity.id);
     if (!mounted) return;
 
+    _debounceFrom?.cancel();
+    _debounceTo?.cancel();
+    _fromSearchGeneration++;
+    _toSearchGeneration++;
+
     setState(() {
       _selectedCity = newCity;
       _mapCenter = newCity.center;
@@ -591,6 +640,7 @@ class _MapScreenState extends State<MapScreen> {
       _fromPoint = null;
       _toPoint = null;
       _routePoints.clear();
+      _intermediateStops.clear();
       _fromAddressController.clear();
       _toAddressController.clear();
       _fromSuggestions.clear();
@@ -609,6 +659,10 @@ class _MapScreenState extends State<MapScreen> {
         startLng: _fromPoint!.longitude,
         destLat: _toPoint!.latitude,
         destLng: _toPoint!.longitude,
+        intermediatePoints: _intermediateStops
+            .map((stop) => stop.point)
+            .whereType<LatLng>()
+            .toList(growable: false),
       );
 
       if (mounted) {
@@ -620,7 +674,7 @@ class _MapScreenState extends State<MapScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка построения маршрута: $e')),
+          SnackBar(content: Text(AppLocalizations.of(context).mapRouteFailed)),
         );
       }
     } finally {
@@ -664,7 +718,9 @@ class _MapScreenState extends State<MapScreen> {
       );
       if (!candidate.isAfter(DateTime.now().toUtc())) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Выберите будущее время.')),
+          SnackBar(
+            content: Text(AppLocalizations.of(context).mapChooseFutureTime),
+          ),
         );
         return;
       }
@@ -694,8 +750,8 @@ class _MapScreenState extends State<MapScreen> {
     if (widget.serviceType.isIntercity &&
         (_fromSettlement == null || _toSettlement == null)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Сначала выберите города отправления и назначения.'),
+        SnackBar(
+          content: Text(AppLocalizations.of(context).mapChooseBothCities),
         ),
       );
       return;
@@ -703,9 +759,18 @@ class _MapScreenState extends State<MapScreen> {
 
     if (_fromPoint == null || _toPoint == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Укажите точки A и B на карте или выберите из списка'),
+        SnackBar(
+          content: Text(AppLocalizations.of(context).mapChooseRoutePoints),
         ),
+      );
+      return;
+    }
+    if (_serviceType == 'city' &&
+        _intermediateStops.any(
+          (stop) => stop.point == null || stop.controller.text.trim().isEmpty,
+        )) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(AppLocalizations.of(context).mapChooseAllStops)),
       );
       return;
     }
@@ -731,9 +796,20 @@ class _MapScreenState extends State<MapScreen> {
       try {
         delivery.validate();
       } on OrderCreationException catch (error) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.userMessage)));
+        if (_destinationApartmentController.text.trim().length > 30) {
+          setState(() => _deliveryDetailsExpanded = true);
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              localizedOrderCreationError(
+                AppLocalizations.of(context),
+                error,
+                serviceType: _serviceType,
+              ),
+            ),
+          ),
+        );
         return;
       }
     }
@@ -749,9 +825,17 @@ class _MapScreenState extends State<MapScreen> {
       try {
         intercity.validate();
       } on OrderCreationException catch (error) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.userMessage)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              localizedOrderCreationError(
+                AppLocalizations.of(context),
+                error,
+                serviceType: _serviceType,
+              ),
+            ),
+          ),
+        );
         return;
       }
     }
@@ -763,10 +847,10 @@ class _MapScreenState extends State<MapScreen> {
       orderId = await _orderCreationService
           .createOrder(
             fromAddress: _fromAddressController.text.isEmpty
-                ? 'Точка A'
+                ? AppLocalizations.of(context).mapPointA
                 : _fromAddressController.text,
             toAddress: _toAddressController.text.isEmpty
-                ? 'Точка B'
+                ? AppLocalizations.of(context).mapPointB
                 : _toAddressController.text,
             price: priceInt!,
             fromPoint: _fromPoint!,
@@ -775,6 +859,20 @@ class _MapScreenState extends State<MapScreen> {
             serviceType: _serviceType,
             delivery: delivery,
             intercity: intercity,
+            stops: _serviceType == 'city'
+                ? [
+                    ..._intermediateStops.map(
+                      (stop) => OrderDestination(
+                        address: stop.controller.text,
+                        point: stop.point!,
+                      ),
+                    ),
+                    OrderDestination(
+                      address: _toAddressController.text,
+                      point: _toPoint!,
+                    ),
+                  ]
+                : const [],
           )
           .timeout(const Duration(seconds: 15));
     } on TimeoutException catch (error, stackTrace) {
@@ -782,8 +880,8 @@ class _MapScreenState extends State<MapScreen> {
       debugPrintStack(stackTrace: stackTrace);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Нет ответа от сервера. Попробуйте ещё раз.'),
+          SnackBar(
+            content: Text(AppLocalizations.of(context).mapServerTimeout),
           ),
         );
       }
@@ -793,17 +891,6 @@ class _MapScreenState extends State<MapScreen> {
         '[OrderCreation] UI failure type=${error.runtimeType} error=$error',
       );
       debugPrintStack(stackTrace: stackTrace);
-      if (error is OrderCreationException &&
-          error.failure == OrderCreationFailure.belowMinimumFare) {
-        final minimumFare =
-            error.minimumFare ?? _orderCreationService.currentMinimumFare;
-        if ((_readEnteredPrice() ?? 0) < minimumFare) {
-          _priceController.text = minimumFare.toString();
-        }
-        if (mounted) {
-          setState(() => _priceErrorText = error.userMessage);
-        }
-      }
       if (error is OrderCreationException &&
           error.failure == OrderCreationFailure.activeOrderExists) {
         final activeOrder = await ActiveOrderService().findCurrentOrder();
@@ -821,17 +908,12 @@ class _MapScreenState extends State<MapScreen> {
           return;
         }
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Найдена устаревшая привязка заказа. Она не удалена автоматически. '
-              'Обратитесь к администратору для проверки.',
-            ),
-          ),
+          SnackBar(content: Text(AppLocalizations.of(context).mapStaleOrder)),
         );
         return;
       }
       if (mounted) {
-        showOrderCreationError(context, error);
+        showOrderCreationError(context, error, serviceType: _serviceType);
       }
       return;
     } finally {
@@ -844,6 +926,232 @@ class _MapScreenState extends State<MapScreen> {
       MaterialPageRoute(builder: (_) => OrderTrackingScreen(orderId: orderId)),
     );
   }
+
+  Widget _deliverySectionCard({
+    required Key key,
+    required String title,
+    required IconData icon,
+    required Widget child,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      key: key,
+      elevation: 0,
+      margin: const EdgeInsets.only(bottom: 10),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: scheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: 20, color: scheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            child,
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDeliveryDetails() {
+    final l10n = AppLocalizations.of(context);
+    return Column(
+      children: [
+        _deliverySectionCard(
+          key: const Key('delivery_parcel_section'),
+          title: l10n.deliveryParcelSection,
+          icon: Icons.inventory_2_outlined,
+          child: TextField(
+            key: const Key('delivery_item_description_field'),
+            controller: _itemDescriptionController,
+            textCapitalization: TextCapitalization.sentences,
+            textInputAction: TextInputAction.next,
+            maxLength: 500,
+            decoration: InputDecoration(
+              labelText: l10n.mapPackageDescription,
+              hintText: l10n.mapPackageExample,
+              border: const OutlineInputBorder(),
+              counterText: '',
+            ),
+          ),
+        ),
+        _deliverySectionCard(
+          key: const Key('delivery_contacts_section'),
+          title: l10n.deliveryContactsSection,
+          icon: Icons.people_outline,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                l10n.deliverySenderSection,
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                l10n.deliverySenderCurrentUser,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const Divider(height: 24),
+              Text(
+                l10n.deliveryRecipientSection,
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                key: const Key('delivery_recipient_name_field'),
+                controller: _recipientNameController,
+                textCapitalization: TextCapitalization.words,
+                textInputAction: TextInputAction.next,
+                decoration: InputDecoration(
+                  labelText: l10n.mapRecipientName,
+                  prefixIcon: const Icon(Icons.person_outline),
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                key: const Key('delivery_recipient_phone_field'),
+                controller: _recipientPhoneController,
+                keyboardType: TextInputType.phone,
+                inputFormatters: [RuPhoneInputFormatter()],
+                decoration: InputDecoration(
+                  labelText: l10n.mapRecipientPhone,
+                  hintText: '+7 ...',
+                  prefixIcon: const Icon(Icons.phone_outlined),
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Card(
+          key: const Key('delivery_additional_section'),
+          elevation: 0,
+          margin: const EdgeInsets.only(bottom: 10),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(
+              color: Theme.of(context).colorScheme.outlineVariant,
+            ),
+          ),
+          child: Column(
+            children: [
+              InkWell(
+                key: const Key('delivery_additional_toggle'),
+                onTap: () => setState(
+                  () => _deliveryDetailsExpanded = !_deliveryDetailsExpanded,
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.tune_outlined, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          l10n.deliveryAdditionalSection,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ),
+                      if (!_deliveryDetailsExpanded &&
+                          _destinationApartmentController.text
+                              .trim()
+                              .isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: Text(
+                            l10n.deliveryDetailsFilled,
+                            style: Theme.of(context).textTheme.labelSmall,
+                          ),
+                        ),
+                      Icon(
+                        _deliveryDetailsExpanded
+                            ? Icons.keyboard_arrow_up
+                            : Icons.keyboard_arrow_down,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (_deliveryDetailsExpanded)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  child: TextField(
+                    key: const Key('delivery_destination_apartment_field'),
+                    controller: _destinationApartmentController,
+                    keyboardType: TextInputType.text,
+                    maxLength: 30,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      labelText: l10n.mapRecipientApartment,
+                      hintText: '25',
+                      prefixIcon: const Icon(Icons.apartment_outlined),
+                      border: const OutlineInputBorder(),
+                      counterText: '',
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPriceField() => TextField(
+    key: const Key('order_price_field'),
+    controller: _priceController,
+    keyboardType: TextInputType.number,
+    onChanged: (_) {
+      setState(() {
+        _priceErrorText = _priceValidationMessage(_readEnteredPrice());
+      });
+    },
+    decoration: InputDecoration(
+      labelText: AppLocalizations.of(context).mapYourPrice,
+      errorText: _priceErrorText,
+      prefixIcon: const Icon(Icons.attach_money, color: Colors.amber),
+      border: const OutlineInputBorder(),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    ),
+  );
+
+  Widget _buildOrderButton() => SizedBox(
+    width: double.infinity,
+    height: 48,
+    child: ElevatedButton(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.amber,
+        foregroundColor: Colors.black,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      onPressed: _isCreatingOrder ? null : _submitOrder,
+      child: _isCreatingOrder
+          ? const CircularProgressIndicator(color: Colors.black)
+          : Text(
+              switch (_serviceType) {
+                'delivery' => AppLocalizations.of(context).mapRequestDelivery,
+                'intercity' => AppLocalizations.of(context).mapRequestIntercity,
+                _ => AppLocalizations.of(context).mapRequestTaxi,
+              },
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -865,13 +1173,26 @@ class _MapScreenState extends State<MapScreen> {
                   color: Colors.amber,
                 ),
                 const SizedBox(width: 6),
-                Text(
-                  widget.serviceType.isIntercity
-                      ? widget.serviceType.title
-                      : '${widget.serviceType.title} — ${_selectedCity.name}',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
+                Flexible(
+                  child: Text(
+                    widget.serviceType.isIntercity
+                        ? widget.serviceType.localizedTitle(
+                            AppLocalizations.of(context),
+                          )
+                        : AppLocalizations.of(context).mapServiceInCity(
+                            widget.serviceType.localizedTitle(
+                              AppLocalizations.of(context),
+                            ),
+                            _selectedCity.localizedName(
+                              Localizations.localeOf(context).languageCode,
+                            ),
+                          ),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 if (!widget.serviceType.isIntercity)
@@ -968,7 +1289,9 @@ class _MapScreenState extends State<MapScreen> {
                                     Icon(widget.serviceType.icon, size: 22),
                                     const SizedBox(width: 8),
                                     Text(
-                                      widget.serviceType.title,
+                                      widget.serviceType.localizedTitle(
+                                        AppLocalizations.of(context),
+                                      ),
                                       key: const Key(
                                         'order_form_service_title',
                                       ),
@@ -990,6 +1313,26 @@ class _MapScreenState extends State<MapScreen> {
                         ),
                         if (_isOrderPanelExpanded) ...[
                           const SizedBox(height: 8),
+                          if (_serviceType == 'delivery') ...[
+                            Padding(
+                              key: const Key('delivery_route_section'),
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.route_outlined),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    AppLocalizations.of(
+                                      context,
+                                    ).deliveryRouteSection,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleMedium,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                           if (widget.serviceType.isIntercity) ...[
                             _buildSettlementField(isPickup: true),
                             const SizedBox(height: 8),
@@ -1006,8 +1349,12 @@ class _MapScreenState extends State<MapScreen> {
                             onTap: () =>
                                 _openUnifiedAddressPicker(isPickup: true),
                             decoration: InputDecoration(
-                              labelText: 'Точный адрес отправления',
-                              hintText: 'Выберите адрес',
+                              labelText: AppLocalizations.of(
+                                context,
+                              ).mapExactPickupAddress,
+                              hintText: AppLocalizations.of(
+                                context,
+                              ).mapChooseAddress,
                               prefixIcon: const Icon(
                                 Icons.my_location,
                                 color: Colors.green,
@@ -1021,6 +1368,8 @@ class _MapScreenState extends State<MapScreen> {
                             ),
                             onChanged: (val) {
                               _debounceFrom?.cancel();
+                              final generation = ++_fromSearchGeneration;
+                              final selectedCity = _selectedCity;
                               _debounceFrom = Timer(
                                 const Duration(milliseconds: 350),
                                 () async {
@@ -1042,13 +1391,16 @@ class _MapScreenState extends State<MapScreen> {
                                                     ))
                                         : await (widget.cityAddressSearch?.call(
                                                 val,
-                                                _selectedCity,
+                                                selectedCity,
                                               ) ??
                                               GeocodingService.searchCityAddress(
                                                 query: val,
-                                                city: _selectedCity,
+                                                city: selectedCity,
                                               ));
-                                    if (mounted) {
+                                    if (mounted &&
+                                        generation == _fromSearchGeneration &&
+                                        selectedCity.id == _selectedCity.id &&
+                                        val == _fromAddressController.text) {
                                       setState(
                                         () => _fromSuggestions = results.toList(
                                           growable: true,
@@ -1134,6 +1486,38 @@ class _MapScreenState extends State<MapScreen> {
                             _buildSettlementField(isPickup: false),
                             const SizedBox(height: 8),
                           ],
+                          if (widget.serviceType == OrderServiceType.city)
+                            for (
+                              var stopIndex = 0;
+                              stopIndex < _intermediateStops.length;
+                              stopIndex++
+                            ) ...[
+                              TextField(
+                                key: Key('stop_address_field_$stopIndex'),
+                                controller:
+                                    _intermediateStops[stopIndex].controller,
+                                readOnly: true,
+                                onTap: () => _openStopPicker(stopIndex),
+                                decoration: InputDecoration(
+                                  labelText: AppLocalizations.of(
+                                    context,
+                                  ).mapStopNumber(stopIndex + 1),
+                                  prefixIcon: const Icon(
+                                    Icons.location_on_outlined,
+                                    color: Colors.orange,
+                                  ),
+                                  suffixIcon: IconButton(
+                                    tooltip: AppLocalizations.of(
+                                      context,
+                                    ).mapRemoveStop,
+                                    icon: const Icon(Icons.close),
+                                    onPressed: () => _removeStop(stopIndex),
+                                  ),
+                                  border: const OutlineInputBorder(),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                            ],
                           // Поле Куда
                           TextField(
                             key: const Key('to_address_field'),
@@ -1146,10 +1530,21 @@ class _MapScreenState extends State<MapScreen> {
                             onTap: () =>
                                 _openUnifiedAddressPicker(isPickup: false),
                             decoration: InputDecoration(
-                              labelText: widget.serviceType.isDelivery
-                                  ? 'Точный адрес доставки'
-                                  : 'Точный адрес назначения',
-                              hintText: 'Выберите адрес',
+                              labelText:
+                                  widget.serviceType == OrderServiceType.city
+                                  ? AppLocalizations.of(
+                                      context,
+                                    ).mapFinalDestination
+                                  : widget.serviceType.isDelivery
+                                  ? AppLocalizations.of(
+                                      context,
+                                    ).mapExactDeliveryAddress
+                                  : AppLocalizations.of(
+                                      context,
+                                    ).mapExactDestinationAddress,
+                              hintText: AppLocalizations.of(
+                                context,
+                              ).mapChooseAddress,
                               prefixIcon: const Icon(
                                 Icons.location_on,
                                 color: Colors.red,
@@ -1163,6 +1558,8 @@ class _MapScreenState extends State<MapScreen> {
                             ),
                             onChanged: (val) {
                               _debounceTo?.cancel();
+                              final generation = ++_toSearchGeneration;
+                              final selectedCity = _selectedCity;
                               _debounceTo = Timer(
                                 const Duration(milliseconds: 350),
                                 () async {
@@ -1184,13 +1581,16 @@ class _MapScreenState extends State<MapScreen> {
                                                     ))
                                         : await (widget.cityAddressSearch?.call(
                                                 val,
-                                                _selectedCity,
+                                                selectedCity,
                                               ) ??
                                               GeocodingService.searchCityAddress(
                                                 query: val,
-                                                city: _selectedCity,
+                                                city: selectedCity,
                                               ));
-                                    if (mounted) {
+                                    if (mounted &&
+                                        generation == _toSearchGeneration &&
+                                        selectedCity.id == _selectedCity.id &&
+                                        val == _toAddressController.text) {
                                       setState(
                                         () => _toSuggestions = results.toList(
                                           growable: true,
@@ -1271,63 +1671,24 @@ class _MapScreenState extends State<MapScreen> {
 
                           const SizedBox(height: 8),
 
-                          if (_serviceType == 'delivery') ...[
-                            TextField(
-                              key: const Key(
-                                'delivery_destination_apartment_field',
-                              ),
-                              controller: _destinationApartmentController,
-                              keyboardType: TextInputType.text,
-                              maxLength: 30,
-                              decoration: const InputDecoration(
-                                labelText:
-                                    'Квартира получателя (необязательно)',
-                                hintText: '25',
-                                prefixIcon: Icon(Icons.apartment_outlined),
-                                border: OutlineInputBorder(),
-                                counterText: '',
+                          if (widget.serviceType == OrderServiceType.city &&
+                              _intermediateStops.length < 3)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                key: const Key('add_order_stop'),
+                                onPressed: _addStop,
+                                icon: const Icon(
+                                  Icons.add_location_alt_outlined,
+                                ),
+                                label: Text(
+                                  AppLocalizations.of(context).mapAddAddress,
+                                ),
                               ),
                             ),
-                            const SizedBox(height: 8),
-                            TextField(
-                              key: const Key('delivery_item_description_field'),
-                              controller: _itemDescriptionController,
-                              textCapitalization: TextCapitalization.sentences,
-                              maxLength: 500,
-                              decoration: const InputDecoration(
-                                labelText: 'Описание посылки',
-                                hintText: 'Например: документы',
-                                prefixIcon: Icon(Icons.inventory_2_outlined),
-                                border: OutlineInputBorder(),
-                                counterText: '',
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            TextField(
-                              key: const Key('delivery_recipient_name_field'),
-                              controller: _recipientNameController,
-                              textCapitalization: TextCapitalization.words,
-                              decoration: const InputDecoration(
-                                labelText: 'Имя получателя',
-                                prefixIcon: Icon(Icons.person_outline),
-                                border: OutlineInputBorder(),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            TextField(
-                              key: const Key('delivery_recipient_phone_field'),
-                              controller: _recipientPhoneController,
-                              keyboardType: TextInputType.phone,
-                              inputFormatters: [RuPhoneInputFormatter()],
-                              decoration: const InputDecoration(
-                                labelText: 'Телефон получателя',
-                                hintText: '+7 ...',
-                                prefixIcon: Icon(Icons.phone_outlined),
-                                border: OutlineInputBorder(),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                          ],
+
+                          if (_serviceType == 'delivery')
+                            _buildDeliveryDetails(),
 
                           if (_serviceType == 'intercity') ...[
                             Row(
@@ -1355,10 +1716,12 @@ class _MapScreenState extends State<MapScreen> {
                             DropdownButtonFormField<int>(
                               key: const Key('intercity_passenger_count_field'),
                               initialValue: _passengerCount,
-                              decoration: const InputDecoration(
-                                labelText: 'Количество пассажиров',
-                                prefixIcon: Icon(Icons.people_outline),
-                                border: OutlineInputBorder(),
+                              decoration: InputDecoration(
+                                labelText: AppLocalizations.of(
+                                  context,
+                                ).mapPassengerCount,
+                                prefixIcon: const Icon(Icons.people_outline),
+                                border: const OutlineInputBorder(),
                               ),
                               items: List.generate(
                                 8,
@@ -1376,7 +1739,9 @@ class _MapScreenState extends State<MapScreen> {
                             SwitchListTile(
                               key: const Key('intercity_luggage_field'),
                               contentPadding: EdgeInsets.zero,
-                              title: const Text('Есть багаж'),
+                              title: Text(
+                                AppLocalizations.of(context).mapHasLuggage,
+                              ),
                               secondary: const Icon(Icons.luggage),
                               value: _hasLuggage,
                               onChanged: (value) {
@@ -1389,70 +1754,38 @@ class _MapScreenState extends State<MapScreen> {
                               textCapitalization: TextCapitalization.sentences,
                               maxLength: 500,
                               maxLines: 2,
-                              decoration: const InputDecoration(
-                                labelText: 'Комментарий (необязательно)',
-                                prefixIcon: Icon(Icons.comment_outlined),
-                                border: OutlineInputBorder(),
+                              decoration: InputDecoration(
+                                labelText: AppLocalizations.of(
+                                  context,
+                                ).mapOptionalComment,
+                                prefixIcon: const Icon(Icons.comment_outlined),
+                                border: const OutlineInputBorder(),
                                 counterText: '',
                               ),
                             ),
                             const SizedBox(height: 8),
                           ],
 
-                          TextField(
-                            controller: _priceController,
-                            keyboardType: TextInputType.number,
-                            onChanged: (value) {
-                              setState(() {
-                                _priceErrorText = _priceValidationMessage(
-                                  _readEnteredPrice(),
-                                );
-                              });
-                            },
-                            decoration: InputDecoration(
-                              labelText: 'Ваша цена (₸)',
-                              errorText: _priceErrorText,
-                              prefixIcon: const Icon(
-                                Icons.attach_money,
-                                color: Colors.amber,
+                          if (_serviceType == 'delivery')
+                            _deliverySectionCard(
+                              key: const Key('delivery_price_section'),
+                              title: AppLocalizations.of(
+                                context,
+                              ).deliveryPriceSection,
+                              icon: Icons.payments_outlined,
+                              child: Column(
+                                children: [
+                                  _buildPriceField(),
+                                  const SizedBox(height: 12),
+                                  _buildOrderButton(),
+                                ],
                               ),
-                              border: const OutlineInputBorder(),
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 10,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 48,
-                            child: ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.amber,
-                                foregroundColor: Colors.black,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                              onPressed: _isCreatingOrder ? null : _submitOrder,
-                              child: _isCreatingOrder
-                                  ? const CircularProgressIndicator(
-                                      color: Colors.black,
-                                    )
-                                  : Text(
-                                      switch (_serviceType) {
-                                        'delivery' => 'Заказать доставку',
-                                        'intercity' => 'Заказать межгород',
-                                        _ => 'Заказать такси',
-                                      },
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                            ),
-                          ),
+                            )
+                          else ...[
+                            _buildPriceField(),
+                            const SizedBox(height: 12),
+                            _buildOrderButton(),
+                          ],
                         ],
                       ],
                     ),
@@ -1465,4 +1798,11 @@ class _MapScreenState extends State<MapScreen> {
       ),
     );
   }
+}
+
+class _IntermediateStop {
+  final TextEditingController controller = TextEditingController();
+  LatLng? point;
+
+  void dispose() => controller.dispose();
 }

@@ -37,6 +37,23 @@ function coordinate(value, min, max) {
     : null;
 }
 
+function intermediateWaypoints(value) {
+  if (value === undefined || value === '') return [];
+  if (typeof value !== 'string') return null;
+  const rawPoints = value.split(';');
+  if (rawPoints.length > 3) return null;
+  const points = [];
+  for (const raw of rawPoints) {
+    const parts = raw.split(',');
+    if (parts.length !== 2) return null;
+    const lng = coordinate(parts[0], -180, 180);
+    const lat = coordinate(parts[1], -90, 90);
+    if (lat === null || lng === null) return null;
+    points.push({ lat, lng });
+  }
+  return points;
+}
+
 function upstreamError(res, status, message) {
   return res.status(status).json({ error: message });
 }
@@ -102,12 +119,18 @@ export function createRoutingRouter({
     const startLng = coordinate(req.query.startLng, -180, 180);
     const destLat = coordinate(req.query.destLat, -90, 90);
     const destLng = coordinate(req.query.destLng, -180, 180);
+    const waypoints = intermediateWaypoints(req.query.waypoints);
 
-    if ([startLat, startLng, destLat, destLng].some((value) => value === null)) {
+    if (waypoints === null || [startLat, startLng, destLat, destLng].some((value) => value === null)) {
       return res.status(400).json({ error: 'Invalid route coordinates' });
     }
 
-    const path = `/route/v1/driving/${startLng},${startLat};${destLng},${destLat}`;
+    const coordinates = [
+      `${startLng},${startLat}`,
+      ...waypoints.map((point) => `${point.lng},${point.lat}`),
+      `${destLng},${destLat}`,
+    ].join(';');
+    const path = `/route/v1/driving/${coordinates}`;
     const url = new URL(`${normalizedOsrmBaseUrl}${path}`);
     url.searchParams.set('steps', 'true');
     url.searchParams.set('geometries', 'geojson');

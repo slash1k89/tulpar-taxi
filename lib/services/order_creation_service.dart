@@ -2,14 +2,12 @@ import 'dart:async';
 
 import 'package:latlong2/latlong.dart';
 
-import 'minimum_fare_service.dart';
 import 'tulpar_api_client.dart';
 import '../utils/formatters.dart';
 
 enum OrderCreationFailure {
   notAuthenticated,
   activeOrderExists,
-  belowMinimumFare,
   invalidData,
   permissionDenied,
   unavailable,
@@ -22,14 +20,12 @@ class OrderCreationException implements Exception {
     this.userMessage, {
     this.cause,
     this.activeOrderId,
-    this.minimumFare,
   });
 
   final OrderCreationFailure failure;
   final String userMessage;
   final Object? cause;
   final String? activeOrderId;
-  final int? minimumFare;
 
   @override
   String toString() => 'OrderCreationException($failure, cause: $cause)';
@@ -46,6 +42,7 @@ class OrderDraft {
     this.serviceType = 'city',
     this.delivery,
     this.intercity,
+    this.stops = const [],
   });
 
   final String fromAddress;
@@ -57,6 +54,7 @@ class OrderDraft {
   final String serviceType;
   final DeliveryOrderDetails? delivery;
   final IntercityOrderDetails? intercity;
+  final List<OrderDestination> stops;
 
   void validate() {
     final from = fromAddress.trim();
@@ -102,6 +100,17 @@ class OrderDraft {
         'Выберите доступный тип услуги.',
       );
     }
+    if (serviceType == 'city' && stops.isNotEmpty) {
+      if (stops.length > 4 ||
+          stops.any((stop) => stop.address.trim().isEmpty) ||
+          stops.last.address.trim() != toAddress.trim() ||
+          stops.last.point != toPoint) {
+        throw const OrderCreationException(
+          OrderCreationFailure.invalidData,
+          'Проверьте адреса остановок.',
+        );
+      }
+    }
 
     if (serviceType == 'delivery') {
       delivery?.validate();
@@ -143,6 +152,18 @@ class OrderDraft {
       'createdAt': createdAt,
     };
   }
+}
+
+class OrderDestination {
+  const OrderDestination({required this.address, required this.point});
+  final String address;
+  final LatLng point;
+
+  Map<String, Object?> toApi() => {
+    'address': address.trim(),
+    'latitude': point.latitude,
+    'longitude': point.longitude,
+  };
 }
 
 class IntercityOrderDetails {
@@ -239,6 +260,7 @@ class VpsOrderCreationGateway implements OrderCreationGateway {
     try {
       final result = await _apiClient.createOrder(
         serviceType: draft.serviceType,
+        cityId: draft.cityId,
         passengerPrice: draft.price,
         pickupAddress: draft.fromAddress.trim(),
         destinationAddress: draft.toAddress.trim(),
@@ -254,6 +276,7 @@ class VpsOrderCreationGateway implements OrderCreationGateway {
         passengerCount: draft.intercity?.passengerCount,
         hasLuggage: draft.intercity?.hasLuggage,
         comment: draft.intercity?.comment.trim(),
+        stops: draft.stops.map((stop) => stop.toApi()).toList(growable: false),
       );
 
       final id = result['id'];
@@ -292,17 +315,6 @@ class VpsOrderCreationGateway implements OrderCreationGateway {
       }
 
       if (error.statusCode == 400) {
-        final minimumFare = error.data?['minimumFare'];
-
-        if (minimumFare is int) {
-          throw OrderCreationException(
-            OrderCreationFailure.belowMinimumFare,
-            'Минимальная стоимость поездки сейчас — $minimumFare ₸.',
-            cause: error,
-            minimumFare: minimumFare,
-          );
-        }
-
         throw OrderCreationException(
           OrderCreationFailure.invalidData,
           error.message,
@@ -326,24 +338,12 @@ class VpsOrderCreationGateway implements OrderCreationGateway {
 }
 
 class OrderCreationService {
-  OrderCreationService({
-    OrderCreationGateway? gateway,
-    MinimumFareService? minimumFareService,
-  }) : _gateway = gateway ?? VpsOrderCreationGateway(),
-       _minimumFareService = minimumFareService ?? MinimumFareService();
+  OrderCreationService({OrderCreationGateway? gateway})
+    : _gateway = gateway ?? VpsOrderCreationGateway();
 
   final OrderCreationGateway _gateway;
-  final MinimumFareService _minimumFareService;
 
   Future<String>? _inFlight;
-
-  int get currentMinimumFare => _minimumFareService.currentMinimumFare;
-
-  int priceWithCurrentMinimum(int proposedPrice) =>
-      _minimumFareService.priceWithMinimum(proposedPrice);
-
-  String minimumFareMessage(int minimumFare) =>
-      _minimumFareService.messageForMinimum(minimumFare);
 
   Future<String> createOrder({
     required String fromAddress,
@@ -355,6 +355,7 @@ class OrderCreationService {
     String serviceType = 'city',
     DeliveryOrderDetails? delivery,
     IntercityOrderDetails? intercity,
+    List<OrderDestination> stops = const [],
   }) {
     final current = _inFlight;
 
@@ -372,6 +373,7 @@ class OrderCreationService {
       serviceType: serviceType,
       delivery: delivery,
       intercity: intercity,
+      stops: stops,
     );
 
     final operation = _create(draft);
@@ -384,16 +386,6 @@ class OrderCreationService {
   Future<String> _create(OrderDraft draft) async {
     try {
       draft.validate();
-
-      final minimumFare = _minimumFareService.currentMinimumFare;
-
-      if (draft.serviceType == 'city' && draft.price < minimumFare) {
-        throw OrderCreationException(
-          OrderCreationFailure.belowMinimumFare,
-          _minimumFareService.messageForMinimum(minimumFare),
-          minimumFare: minimumFare,
-        );
-      }
 
       return await _gateway.create(draft);
     } finally {

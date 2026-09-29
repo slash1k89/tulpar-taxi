@@ -4,6 +4,7 @@ import 'package:taxi_esil/screens/driver/driver_onboarding_screen.dart';
 import 'package:taxi_esil/services/driver_agreement_service.dart';
 import 'package:taxi_esil/services/driver_profile_service.dart';
 import 'package:taxi_esil/services/tulpar_api_client.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
@@ -100,6 +101,9 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          locale: const Locale('ru'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: DriverOnboardingScreen(
             repository: repository,
             userId: 'user-1',
@@ -152,6 +156,9 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: DriverOnboardingScreen(repository: repository, userId: 'user-1'),
       ),
     );
@@ -172,6 +179,9 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: DriverOnboardingScreen(
           repository: repository,
           userId: 'user-1',
@@ -195,6 +205,9 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          locale: const Locale('ru'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: DriverOnboardingScreen(
             repository: repository,
             userId: 'user-1',
@@ -240,6 +253,9 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: DriverOnboardingScreen(
           repository: repository,
           userId: 'user-1',

@@ -85,6 +85,19 @@ void main() {
     },
   );
 
+  testWidgets('session restore registers current token for the same owner', (
+    tester,
+  ) async {
+    final rig = _Rig()..savedOwner = 'user-a';
+
+    unawaited(rig.sync.sync());
+    await flush(tester);
+
+    expect(rig.deleted, 0);
+    expect(rig.registrations, ['user-a:device-token-123456']);
+    rig.sync.dispose();
+  });
+
   testWidgets('account switches during getToken never register stale owner', (
     tester,
   ) async {
@@ -177,11 +190,6 @@ void main() {
     pending.complete('late-device-token-123456');
     await flush(tester);
     expect(rig.registrations, isEmpty);
-  });
-
-  test('diagnostic token suffix never contains full token', () {
-    expect(pushTokenSuffix('secret-fcm-token-123456'), '123456');
-    expect(pushTokenSuffix('short'), '<short-token>');
   });
 }
 

@@ -16,6 +16,7 @@ import 'package:taxi_esil/screens/intercity/intercity_ride_search_screen.dart';
 import 'package:taxi_esil/services/geocoding_service.dart';
 import 'package:taxi_esil/services/intercity_ride_service.dart';
 import 'package:taxi_esil/services/tulpar_api_client.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 void main() {
   testWidgets('mode keeps old intercity order and opens rideshare separately', (
@@ -23,6 +24,9 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityModeScreen(
           orderBuilder: (_) => const Scaffold(body: Text('old-intercity')),
           rideSearchBuilder: (_) => const Scaffold(body: Text('rideshare')),
@@ -46,6 +50,9 @@ void main() {
     final repository = _FakeRepository(searchResult: [_ride]);
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRideSearchScreen(
           repository: repository,
           initialOrigin: _origin,
@@ -61,13 +68,16 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRideResultsScreen(repository: repository, draft: _draft),
       ),
     );
     await tester.pumpAndSettle();
     expect(repository.lastSearch, ('Есиль', 'Астана', 2));
     expect(find.text('4 000 ₸ / место'), findsOneWidget);
-    expect(find.text('Свободно: 3 мест'), findsOneWidget);
+    expect(find.text('Свободно: 3 места'), findsOneWidget);
     await tester
         .widget<RefreshIndicator>(find.byType(RefreshIndicator))
         .onRefresh();
@@ -80,6 +90,9 @@ void main() {
     final repository = _FakeRepository(searchFuture: pending.future);
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRideResultsScreen(repository: repository, draft: _draft),
       ),
     );
@@ -93,6 +106,9 @@ void main() {
     repository.searchResult = [_ride];
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRideResultsScreen(
           key: const ValueKey('error-results'),
           repository: repository,
@@ -118,6 +134,9 @@ void main() {
     );
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRideDetailsScreen(
           repository: repository,
           ride: _ride,
@@ -129,7 +148,10 @@ void main() {
     expect(find.text('Итого: 8 000 ₸'), findsOneWidget);
 
     await _confirmBooking(tester);
-    expect(find.text('temporary'), findsOneWidget);
+    expect(
+      find.text('Не удалось забронировать место. Повторите попытку.'),
+      findsOneWidget,
+    );
     await _confirmBooking(tester);
     expect(repository.bookingCalls, 2);
     expect(repository.bookingClientIds.toSet(), hasLength(1));
@@ -143,6 +165,9 @@ void main() {
     final repository = _FakeRepository(bookingFuture: pending.future);
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRideDetailsScreen(
           repository: repository,
           ride: _ride,
@@ -189,6 +214,9 @@ void main() {
     );
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRideDetailsScreen(
           repository: repository,
           ride: _ride,
@@ -215,7 +243,12 @@ void main() {
       ],
     );
     await tester.pumpWidget(
-      MaterialApp(home: IntercityBookingsScreen(repository: repository)),
+      MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: IntercityBookingsScreen(repository: repository),
+      ),
     );
     await tester.pumpAndSettle();
     expect(find.text('Предстоящие'), findsOneWidget);
@@ -242,6 +275,9 @@ void main() {
     final repository = _FakeRepository(requests: [_request]);
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRequestScreen(
           repository: repository,
           initialDraft: _draft,
@@ -290,6 +326,9 @@ void main() {
     );
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRequestScreen(
           repository: repository,
           initialDraft: _draft,
@@ -305,6 +344,33 @@ void main() {
     await tester.pump();
     expect(find.text('Такая активная заявка уже существует.'), findsOneWidget);
   });
+
+  for (final (code, title, empty) in [
+    ('kk', 'Менің сұрауларым', 'Әзірге белсенді сұраулар жоқ'),
+    ('en', 'My requests', 'No active requests yet'),
+  ]) {
+    testWidgets('request list uses $code', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          locale: Locale(code),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: IntercityRequestScreen(
+            repository: _FakeRepository(),
+            initialDraft: _draft,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text(title),
+        150,
+        scrollable: find.byType(Scrollable).first,
+      );
+      expect(find.text(title), findsOneWidget);
+      expect(find.text(empty), findsOneWidget);
+    });
+  }
 }
 
 Future<void> _confirmBooking(WidgetTester tester) async {

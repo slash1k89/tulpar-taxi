@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import '../order_workflow_service.dart';
+import '../address_label_service.dart';
 import '../../screens/chat/chat_screen.dart';
 import '../../widgets/rating_dialog.dart';
 import '../../widgets/tulpar_map_tile_layer.dart';
@@ -157,7 +158,7 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      'Клиент ожидает: ${widget.orderData['fromAddress']}',
+                      'Клиент ожидает: ${AddressLabelService.fromOrder(widget.orderData, Localizations.localeOf(context), const ['fromAddress', 'pickupAddress'])}',
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 10),
@@ -172,6 +173,7 @@ class _DriverMapScreenState extends State<DriverMapScreen> {
                               MaterialPageRoute(
                                 builder: (_) => ChatScreen(
                                   orderId: widget.orderId,
+                                  peerUserId: widget.orderData['passengerId']?.toString(),
                                   peerName: 'Пассажир',
                                 ),
                               ),

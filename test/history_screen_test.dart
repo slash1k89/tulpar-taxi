@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:taxi_esil/screens/profile/history_screen.dart';
 import 'package:taxi_esil/services/tulpar_api_client.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 TulparApiClient _client(http.Response response) => TulparApiClient(
   client: MockClient((request) async {
@@ -59,6 +60,9 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: HistoryScreen(
           historyLoader: () async => [
             _order('city', 'Такси'),
@@ -80,6 +84,9 @@ void main() {
     var calls = 0;
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: HistoryScreen(
           historyLoader: () async {
             calls++;

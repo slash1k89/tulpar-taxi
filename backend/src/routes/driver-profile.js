@@ -21,12 +21,14 @@ export function createDriverProfileRouter({ pool, requireAuth }) {
           dp.car_model,
           dp.car_color,
           dp.car_number,
+          work_city.slug AS work_city_slug,
           dp.agreement_version,
           dp.agreement_accepted_at,
           dp.created_at,
           dp.updated_at
         FROM driver_profiles dp
         JOIN users u ON u.id = dp.user_id
+        JOIN cities work_city ON work_city.id = dp.work_city_id
         WHERE (u.firebase_uid = $1 OR u.id::text = $1)
         `,
         [req.user.uid],
@@ -46,6 +48,7 @@ export function createDriverProfileRouter({ pool, requireAuth }) {
         carModel: profile.car_model,
         carColor: profile.car_color,
         carNumber: profile.car_number,
+        workCityId: profile.work_city_slug,
         agreementVersion: profile.agreement_version,
         agreementAcceptedAt: profile.agreement_accepted_at,
         createdAt: profile.created_at,
@@ -57,6 +60,62 @@ export function createDriverProfileRouter({ pool, requireAuth }) {
       res.status(500).json({
         error: 'Failed to load driver profile',
       });
+    }
+  });
+
+  router.post('/work-city', requireAuth, async (req, res) => {
+    const slug = req.body?.cityId;
+    if (typeof slug !== 'string' || !/^[a-z][a-z0-9-]{1,39}$/.test(slug)) {
+      return res.status(400).json({ code: 'invalid_city', error: 'Invalid city' });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const profileResult = await client.query(
+        `SELECT dp.user_id, dp.work_city_id
+         FROM driver_profiles dp JOIN users u ON u.id = dp.user_id
+         WHERE (u.firebase_uid = $1 OR u.id::text = $1)
+         FOR UPDATE OF dp`,
+        [req.user.uid],
+      );
+      if (!profileResult.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Driver profile not found' });
+      }
+      const cityResult = await client.query(
+        'SELECT id, slug FROM cities WHERE slug = $1 AND is_enabled = TRUE',
+        [slug],
+      );
+      if (!cityResult.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ code: 'invalid_city', error: 'Invalid city' });
+      }
+      const profile = profileResult.rows[0];
+      if (Number(profile.work_city_id) !== Number(cityResult.rows[0].id)) {
+        const active = await client.query(
+          `SELECT 1 FROM orders WHERE driver_id = $1
+           AND service_type IN ('city', 'delivery')
+           AND status IN ('accepted', 'driver_arrived', 'in_progress', 'queued')
+           LIMIT 1`,
+          [profile.user_id],
+        );
+        if (active.rows.length) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ code: 'active_order', error: 'Finish the active order first' });
+        }
+        await client.query(
+          'UPDATE driver_profiles SET work_city_id = $1, updated_at = now() WHERE user_id = $2',
+          [cityResult.rows[0].id, profile.user_id],
+        );
+      }
+      await client.query('COMMIT');
+      return res.json({ cityId: cityResult.rows[0].slug });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('[DriverWorkCity]', error);
+      return res.status(500).json({ error: 'Failed to update work city' });
+    } finally {
+      client.release();
     }
   });
 
@@ -396,10 +455,7 @@ router.get('/access', requireAuth, async (req, res) => {
       suspended,
       accessExempt,
       subscriptionActive,
-      accessGranted:
-        profileActive &&
-        !suspended &&
-        (accessExempt || subscriptionActive),
+      accessGranted: profileActive && !suspended,
       validUntil: row.valid_until,
     });
   } catch (error) {
@@ -412,6 +468,14 @@ router.get('/access', requireAuth, async (req, res) => {
 });
 
 router.post('/subscription/create', requireAuth, async (req, res) => {
+  // Payments are intentionally disabled for the first store release. Keep
+  // the legacy route explicit so an older client cannot create a hidden
+  // pending payment or open an external payment flow.
+  return res.status(410).json({
+    code: 'driver_access_is_free',
+    error: 'Approved drivers have free access',
+  });
+  /* c8 ignore start -- retained only as migration history; unreachable. */
   const client = await pool.connect();
 
   try {
@@ -560,6 +624,7 @@ router.post('/subscription/create', requireAuth, async (req, res) => {
   } finally {
     client.release();
   }
+  /* c8 ignore stop */
 });
 
   return router;

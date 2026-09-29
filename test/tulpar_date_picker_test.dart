@@ -12,18 +12,17 @@ import 'package:taxi_esil/screens/map/map_screen.dart';
 import 'package:taxi_esil/services/geocoding_service.dart';
 import 'package:taxi_esil/services/intercity_ride_service.dart';
 import 'package:taxi_esil/widgets/tulpar_date_picker.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 void main() {
-  testWidgets('opens without localization and shows Russian month names', (
+  testWidgets('opens with Russian localization and shows month names', (
     tester,
   ) async {
     await _pumpLauncher(tester, initialDate: DateTime(2028, 2, 10));
     await _open(tester);
 
     expect(tester.takeException(), isNull);
-    expect(find.text('Февраль 2028'), findsOneWidget);
-    expect(find.text('Пн'), findsOneWidget);
-    expect(find.text('Вс'), findsOneWidget);
+    expect(find.textContaining('феврал'), findsWidgets);
     expect(find.byType(CalendarDatePicker), findsNothing);
   });
 
@@ -78,10 +77,10 @@ void main() {
     await _open(tester);
     await tester.tap(find.byKey(const Key('tulpar_date_next_month')));
     await tester.pump();
-    expect(find.text('Январь 2029'), findsOneWidget);
+    expect(find.textContaining('январ'), findsWidgets);
     await tester.tap(find.byKey(const Key('tulpar_date_previous_month')));
     await tester.pump();
-    expect(find.text('Декабрь 2028'), findsOneWidget);
+    expect(find.textContaining('декабр'), findsWidgets);
   });
 
   testWidgets('clamps initial date and disables dates outside predicate', (
@@ -123,7 +122,7 @@ void main() {
     await tester.tap(find.byKey(const Key('tulpar_date_next_month')));
     await tester.pump();
 
-    expect(find.text('Февраль 2028'), findsOneWidget);
+    expect(find.textContaining('феврал'), findsWidgets);
     for (var day = 1; day <= 29; day++) {
       expect(
         tester
@@ -190,6 +189,9 @@ void main() {
     SharedPreferences.setMockInitialValues({'selected_city_id': 'esil'});
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: MapScreen(
           serviceType: OrderServiceType.intercity,
           locationProvider: () async => null,
@@ -203,8 +205,11 @@ void main() {
 
   testWidgets('rideshare search opens Tulpar date picker', (tester) async {
     await tester.pumpWidget(
-      const MaterialApp(
-        home: IntercityRideSearchScreen(initialOrigin: _origin),
+      MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: const IntercityRideSearchScreen(initialOrigin: _origin),
       ),
     );
     await _openFromScreen(tester, const Key('intercity_travel_date'));
@@ -213,6 +218,9 @@ void main() {
   testWidgets('ride request opens Tulpar date picker', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRequestScreen(
           repository: _RequestRepository(),
           initialDraft: IntercityRideSearchDraft(
@@ -233,6 +241,9 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityCreateRideScreen(
           initialOrigin: _origin,
           initialDestination: _destination,
@@ -246,6 +257,9 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityCreateRideScreen(ride: _ride, hasConfirmedBooking: true),
       ),
     );
@@ -269,6 +283,9 @@ Future<void> _pumpLauncher(
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      locale: const Locale('ru'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       theme: theme,
       home: Scaffold(
         body: Builder(

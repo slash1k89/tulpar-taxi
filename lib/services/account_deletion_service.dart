@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import 'driver_agreement_service.dart';
 import 'tulpar_api_client.dart';
+import 'tulpar_auth_session.dart';
 
 enum AccountDeletionOutcome { deleted, pending }
 
@@ -133,7 +134,10 @@ class DefaultAccountDeletionController implements AccountDeletionController {
         'Введите текущий пароль.',
       );
     }
-    final userId = _reauthentication.currentUserId;
+    final tulparSession = TulparAuthController.instance.hasSession;
+    final userId = tulparSession
+        ? TulparAuthController.instance.currentUserId
+        : _reauthentication.currentUserId;
     if (userId == null) {
       throw const AccountDeletionException(
         'user_not_found',
@@ -141,11 +145,15 @@ class DefaultAccountDeletionController implements AccountDeletionController {
       );
     }
 
-    await _reauthentication.reauthenticate(password);
-    await _reauthentication.forceRefreshIdToken();
+    if (!tulparSession) {
+      await _reauthentication.reauthenticate(password);
+      await _reauthentication.forceRefreshIdToken();
+    }
 
     try {
-      final response = await _apiClient.deleteCurrentAccount();
+      final response = await _apiClient.deleteCurrentAccount(
+        password: tulparSession ? password : null,
+      );
       final status = response['status']?.toString();
       if (status != 'deleted' && status != 'deletion_pending') {
         throw const AccountDeletionException(
@@ -159,7 +167,12 @@ class DefaultAccountDeletionController implements AccountDeletionController {
         () => _agreementService.clearAcceptance(userId),
       );
       await _bestEffortCleanup('push', _clearPushToken);
-      await _bestEffortCleanup('signout', _reauthentication.signOut);
+      await _bestEffortCleanup(
+        'signout',
+        tulparSession
+            ? TulparAuthController.instance.clearLocalSession
+            : _reauthentication.signOut,
+      );
       return status == 'deleted'
           ? AccountDeletionOutcome.deleted
           : AccountDeletionOutcome.pending;

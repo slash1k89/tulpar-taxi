@@ -11,6 +11,7 @@ import {
 import { createAccessTokenMiddleware } from '../src/auth/authenticate-access-token.js';
 import { OtpChallengeError } from '../src/auth/otp-service.js';
 import { PhoneIdentityConflictError } from '../src/auth/phone-identity-service.js';
+import { PasswordAuthError } from '../src/auth/password-service.js';
 import { normalizeKazakhstanPhone } from '../src/auth/phone-normalization.js';
 import { createAuthRouter } from '../src/routes/auth.js';
 
@@ -46,13 +47,14 @@ class FakeOtpService {
     return true;
   }
 
-  async createExternalChallenge(phone, { method, provider, requestCode }) {
+  async createExternalChallenge(phone, { method, provider, requestCode, purpose = 'login' }) {
     const normalized = normalizeKazakhstanPhone(phone);
     const result = await requestCode(normalized);
     if (method !== 'flash_call' || provider !== 'autocall') {
       throw new OtpChallengeError('unsupported_method');
     }
     this.flashCode = result.code;
+    this.purpose = purpose;
     this.consumed = false;
     return {
       challengeId,
@@ -63,11 +65,12 @@ class FakeOtpService {
     };
   }
 
-  async verifyChallenge(id, phone, code, { method }) {
+  async verifyChallenge(id, phone, code, { method, purpose = 'login' }) {
     if (
       id !== challengeId ||
       normalizeKazakhstanPhone(phone) !== '+77771234567' ||
       method !== 'flash_call'
+      || purpose !== this.purpose
     ) {
       throw new OtpChallengeError('challenge_not_found');
     }
@@ -76,6 +79,40 @@ class FakeOtpService {
     }
     this.consumed = true;
     return { challengeId, phoneNormalized: '+77771234567', verified: true };
+  }
+}
+
+class FakePasswordService {
+  constructor() {
+    this.passwordHash = null;
+    this.context = null;
+    this.loginCalls = 0;
+  }
+
+  async findVerifiedIdentity() {
+    return this.passwordHash === 'missing-identity'
+      ? null
+      : { user_id: existingUserId, password_hash: this.passwordHash };
+  }
+
+  async createVerificationContext(context) {
+    this.context = context;
+    return 'verified-context-token-012345678901234567890123456789';
+  }
+
+  async setPassword({ verificationToken, purpose, password }) {
+    if (verificationToken !== 'verified-context-token-012345678901234567890123456789'
+      || purpose !== this.context?.purpose) {
+      throw new PasswordAuthError('verification_required');
+    }
+    if (password.length < 8) throw new PasswordAuthError('invalid_password');
+    this.passwordHash = password;
+    return this.context.userId;
+  }
+
+  async login(phone, password) {
+    this.loginCalls++;
+    return this.passwordHash === password ? existingUserId : null;
   }
 }
 
@@ -161,6 +198,7 @@ function fixture({ userId = existingUserId, smsConfigured = true } = {}) {
   const sessionService = new FakeSessionService();
   const smsSender = new FakeSmsSender();
   const verificationProvider = new FakeVerificationProvider();
+  const passwordService = new FakePasswordService();
   smsSender.configured = smsConfigured;
   const app = express();
   app.use(express.json());
@@ -171,6 +209,7 @@ function fixture({ userId = existingUserId, smsConfigured = true } = {}) {
     smsSender,
     authenticateAccessToken: createAccessTokenMiddleware({ secret }),
     verificationProvider,
+    passwordService,
   }));
   return {
     app,
@@ -179,6 +218,7 @@ function fixture({ userId = existingUserId, smsConfigured = true } = {}) {
     sessionService,
     smsSender,
     verificationProvider,
+    passwordService,
   };
 }
 
@@ -217,6 +257,69 @@ test('Flash Call verification creates a Tulpar session once', async () => {
   assert.equal((await request(target.app)
     .post('/api/auth/verification/verify').send(body)).status, 401);
   assert.equal(target.sessionService.createCalls, 1);
+});
+
+test('password login uses credentials without requesting Flash Call', async () => {
+  const target = fixture();
+  target.passwordService.passwordHash = 'correct-password';
+  const response = await request(target.app).post('/api/auth/login').send({
+    phone: '87771234567', password: 'correct-password',
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.userId, existingUserId);
+  assert.equal(target.passwordService.loginCalls, 1);
+  assert.equal(target.verificationProvider.calls.length, 0);
+  assert.equal((await request(target.app).post('/api/auth/login').send({
+    phone: '87771234567', password: 'wrong-password',
+  })).status, 401);
+});
+
+test('setup Flash Call grants a one-use password context, not a session', async () => {
+  const target = fixture();
+  const requested = await request(target.app).post('/api/auth/verification/request').send({
+    phone: '87771234567', method: 'flash_call', purpose: 'setup',
+  });
+  assert.equal(requested.status, 202);
+  const verified = await request(target.app).post('/api/auth/verification/verify').send({
+    challengeId, phone: '87771234567', code: '4321', purpose: 'setup',
+  });
+  assert.equal(verified.status, 200);
+  assert.equal(verified.body.purpose, 'setup');
+  assert.equal(typeof verified.body.verificationToken, 'string');
+  assert.equal(verified.body.accessToken, undefined);
+  assert.equal(target.sessionService.createCalls, 0);
+  const setup = await request(target.app).post('/api/auth/password/setup').send({
+    verificationToken: verified.body.verificationToken,
+    password: 'correct-password',
+  });
+  assert.equal(setup.status, 200);
+  assert.equal(setup.body.userId, existingUserId);
+  assert.equal(target.sessionService.createCalls, 1);
+});
+
+test('reset Flash Call cannot be replayed as setup or bypass verification', async () => {
+  const target = fixture();
+  target.passwordService.passwordHash = 'old-password';
+  await request(target.app).post('/api/auth/verification/request').send({
+    phone: '87771234567', method: 'flash_call', purpose: 'reset',
+  });
+  const wrongPurpose = await request(target.app).post('/api/auth/verification/verify').send({
+    challengeId, phone: '87771234567', code: '4321', purpose: 'setup',
+  });
+  assert.equal(wrongPurpose.status, 401);
+  const verified = await request(target.app).post('/api/auth/verification/verify').send({
+    challengeId, phone: '87771234567', code: '4321', purpose: 'reset',
+  });
+  assert.equal(verified.status, 200);
+  assert.equal((await request(target.app).post('/api/auth/password/setup').send({
+    verificationToken: verified.body.verificationToken,
+    password: 'new-password',
+  })).status, 400);
+  assert.equal((await request(target.app).post('/api/auth/password/reset').send({
+    verificationToken: verified.body.verificationToken,
+    password: 'new-password',
+  })).status, 200);
+  assert.equal(target.passwordService.passwordHash, 'new-password');
 });
 
 test('Flash Call rejects unsupported method and malformed four-digit code', async () => {

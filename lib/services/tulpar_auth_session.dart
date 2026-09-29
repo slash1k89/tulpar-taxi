@@ -124,6 +124,11 @@ class FlashCallVerificationResult {
   final bool profileRequired;
 }
 
+class PasswordVerificationResult {
+  const PasswordVerificationResult({required this.verificationToken});
+  final String verificationToken;
+}
+
 class TulparAuthController extends ChangeNotifier {
   TulparAuthController({
     TulparAuthSessionStore? store,
@@ -168,12 +173,14 @@ class TulparAuthController extends ChangeNotifier {
 
   Future<FlashCallChallenge> requestFlashCall({
     required String phone,
+    String? purpose,
     String? deviceId,
     String? deviceName,
   }) async {
     final body = await _postJson('/api/auth/verification/request', {
       'phone': phone,
       'method': 'flash_call',
+      'purpose': purpose ?? 'login',
       if (deviceId?.trim().isNotEmpty == true) 'deviceId': deviceId!.trim(),
       if (deviceName?.trim().isNotEmpty == true)
         'deviceName': deviceName!.trim(),
@@ -204,6 +211,46 @@ class TulparAuthController extends ChangeNotifier {
     return FlashCallVerificationResult(
       profileRequired: body['profileRequired'] == true,
     );
+  }
+
+  Future<PasswordVerificationResult> verifyPasswordFlashCall({
+    required String challengeId,
+    required String phone,
+    required String code,
+    required String purpose,
+  }) async {
+    final body = await _postJson('/api/auth/verification/verify', {
+      'challengeId': challengeId,
+      'phone': phone,
+      'code': code,
+      'purpose': purpose,
+    });
+    return PasswordVerificationResult(
+      verificationToken: _requiredString(body, 'verificationToken'),
+    );
+  }
+
+  Future<void> loginWithPassword({
+    required String phone,
+    required String password,
+  }) async {
+    final body = await _postJson('/api/auth/login', {
+      'phone': phone,
+      'password': password,
+    });
+    await _saveSession(body);
+  }
+
+  Future<void> setVerifiedPassword({
+    required String verificationToken,
+    required String password,
+    required String purpose,
+  }) async {
+    final body = await _postJson('/api/auth/password/$purpose', {
+      'verificationToken': verificationToken,
+      'password': password,
+    });
+    await _saveSession(body);
   }
 
   Future<String> validAccessToken({bool forceRefresh = false}) async {

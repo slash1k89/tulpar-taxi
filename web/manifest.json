@@ -1,11 +1,11 @@
 {
-    "name": "TULPAR taxi",
-    "short_name": "TULPAR",
+    "name": "MEKEN",
+    "short_name": "MEKEN",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "MEKEN rides and delivery",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -4,11 +4,13 @@ import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:latlong2/latlong.dart';
 
 import 'api_config.dart';
 import 'tulpar_auth_session.dart';
 
 import '../models/next_order.dart';
+import '../models/order_stops.dart';
 
 class TulparApiException implements Exception {
   const TulparApiException(this.statusCode, this.message, {this.data});
@@ -16,6 +18,12 @@ class TulparApiException implements Exception {
   final int statusCode;
   final String message;
   final Map<String, dynamic>? data;
+
+  int? get retryAfterSeconds {
+    final value = data?['retryAfterSeconds'];
+    if (value is int && value > 0) return value;
+    return int.tryParse(value?.toString() ?? '');
+  }
 
   @override
   String toString() => 'TulparApiException($statusCode, $message)';
@@ -62,15 +70,16 @@ Map<String, dynamic>? normalizeOrderIntercityData(Map<String, dynamic> order) {
 }
 
 Map<String, dynamic> normalizeOrderLifecycleData(Map<String, dynamic> order) {
-  return {
+  return normalizeOrderStops({
     ...order,
     'queuedAfterOrderId':
         order['queuedAfterOrderId'] ?? order['queued_after_order_id'],
-  };
+  });
 }
 
 Map<String, dynamic> buildOrderCreationPayload({
   required String serviceType,
+  String? cityId,
   required int passengerPrice,
   required String pickupAddress,
   required String destinationAddress,
@@ -86,9 +95,12 @@ Map<String, dynamic> buildOrderCreationPayload({
   int? passengerCount,
   bool? hasLuggage,
   String? comment,
+  List<Map<String, Object?>> stops = const [],
 }) {
   return {
     'serviceType': serviceType,
+    if (serviceType == 'city' || serviceType == 'delivery')
+      'cityId': cityId ?? 'esil',
     'passengerPrice': passengerPrice,
     'pickupAddress': pickupAddress,
     'destinationAddress': destinationAddress,
@@ -96,6 +108,7 @@ Map<String, dynamic> buildOrderCreationPayload({
     'pickupLng': pickupLng,
     'destinationLat': destinationLat,
     'destinationLng': destinationLng,
+    if (serviceType == 'city' && stops.isNotEmpty) 'stops': stops,
     if (serviceType == 'delivery') ...{
       'itemDescription': itemDescription?.trim(),
       'recipientName': recipientName?.trim(),
@@ -228,6 +241,15 @@ class TulparApiClient {
     return _decode(response);
   }
 
+  Future<List<Map<String, dynamic>>> getEnabledCities() async {
+    final raw = await _getApi('/api/cities');
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
+  }
+
   Future<Map<String, dynamic>?> getCurrentDriverProfile() async {
     try {
       final raw = await _getApi('/api/driver-profile/me');
@@ -244,6 +266,14 @@ class TulparApiClient {
 
       rethrow;
     }
+  }
+
+  Future<String> updateDriverWorkCity(String cityId) async {
+    final result = await _postApi(
+      '/api/driver-profile/work-city',
+      body: {'cityId': cityId},
+    );
+    return result['cityId']?.toString() ?? cityId;
   }
 
   Future<Map<String, dynamic>> createCurrentDriverDraft() {
@@ -282,6 +312,13 @@ class TulparApiClient {
     required String name,
   }) {
     return _patchApi('/api/users/me', body: {'name': name.trim()});
+  }
+
+  Future<void> updateCurrentUserLocale(String locale) async {
+    if (!const {'ru', 'kk', 'en'}.contains(locale)) {
+      throw ArgumentError.value(locale, 'locale');
+    }
+    await _patchApi('/api/users/me/locale', body: {'locale': locale});
   }
 
   Future<Map<String, dynamic>> getCurrentUserProfile() async {
@@ -327,6 +364,7 @@ class TulparApiClient {
 
   Future<Map<String, dynamic>> createOrder({
     String serviceType = 'city',
+    String? cityId,
     required int passengerPrice,
     required String pickupAddress,
     required String destinationAddress,
@@ -342,6 +380,7 @@ class TulparApiClient {
     int? passengerCount,
     bool? hasLuggage,
     String? comment,
+    List<Map<String, Object?>> stops = const [],
   }) async {
     await syncCurrentUser();
 
@@ -352,6 +391,7 @@ class TulparApiClient {
         body: jsonEncode(
           buildOrderCreationPayload(
             serviceType: serviceType,
+            cityId: cityId,
             passengerPrice: passengerPrice,
             pickupAddress: pickupAddress,
             destinationAddress: destinationAddress,
@@ -367,6 +407,7 @@ class TulparApiClient {
             passengerCount: passengerCount,
             hasLuggage: hasLuggage,
             comment: comment,
+            stops: stops,
           ),
         ),
       ),
@@ -394,6 +435,7 @@ class TulparApiClient {
     final legacyStatus = rawStatus == 'driver_arrived' ? 'arrived' : rawStatus;
 
     return normalizeOrderLifecycleData({
+      ...data,
       'id': data['id'],
       'serviceType': data['serviceType'],
       'status': legacyStatus,
@@ -409,6 +451,7 @@ class TulparApiClient {
       'fromLng': data['pickupLng'],
       'toLat': data['destinationLat'],
       'toLng': data['destinationLng'],
+      'stops': data['stops'],
 
       'distanceMeters': data['distanceMeters'],
 
@@ -522,7 +565,8 @@ class TulparApiClient {
   }
 
   Map<String, dynamic> _availableOrderToLegacy(Map<String, dynamic> data) {
-    return {
+    return normalizeOrderLifecycleData({
+      ...data,
       'id': data['id'],
       'serviceType': data['serviceType'],
       'status': 'searching',
@@ -537,13 +581,14 @@ class TulparApiClient {
       'fromLng': data['pickupLng'],
       'toLat': data['destinationLat'],
       'toLng': data['destinationLng'],
+      'stops': data['stops'],
 
       'distanceMeters': data['distanceMeters'],
       'createdAt': data['createdAt'],
 
       'delivery': normalizeDeliveryData(data['delivery']),
       'intercity': normalizeOrderIntercityData(data),
-    };
+    });
   }
 
   Stream<List<Map<String, dynamic>>> watchAvailableOrders({
@@ -712,13 +757,32 @@ class TulparApiClient {
     return _postApi('/api/orders/$orderId/start');
   }
 
+  Future<List<Map<String, dynamic>>> advanceOrderStop(String orderId) async {
+    final raw = await _postApi('/api/orders/$orderId/stops/advance');
+    final stops = raw['stops'];
+    if (stops is! List) return const [];
+    return stops
+        .whereType<Map>()
+        .map((stop) => Map<String, dynamic>.from(stop))
+        .toList(growable: false);
+  }
+
   Future<CompleteOrderResult> completeRide(String orderId) async {
     final raw = await _postApi('/api/orders/$orderId/complete');
     return CompleteOrderResult.fromJson(raw);
   }
 
-  Future<Map<String, dynamic>> cancelOrder(String orderId) {
-    return _postApi('/api/orders/$orderId/cancel');
+  Future<Map<String, dynamic>> cancelOrder(
+    String orderId, {
+    String? reasonCode,
+    String? reasonText,
+  }) {
+    return _postApi(
+      '/api/orders/$orderId/cancel',
+      body: reasonCode == null
+          ? null
+          : {'reasonCode': reasonCode, 'reasonText': ?reasonText},
+    );
   }
 
   Future<Map<String, dynamic>?> getActiveCurrentOrder() async {
@@ -761,6 +825,7 @@ class TulparApiClient {
     required double startLng,
     required double destLat,
     required double destLng,
+    List<LatLng> intermediatePoints = const [],
   }) async {
     final uri = Uri.parse('$baseUrl/api/routing/route').replace(
       queryParameters: {
@@ -768,6 +833,10 @@ class TulparApiClient {
         'startLng': startLng.toString(),
         'destLat': destLat.toString(),
         'destLng': destLng.toString(),
+        if (intermediatePoints.isNotEmpty)
+          'waypoints': intermediatePoints
+              .map((point) => '${point.longitude},${point.latitude}')
+              .join(';'),
       },
     );
     final response = await _sendAuthenticated(
@@ -790,6 +859,7 @@ class TulparApiClient {
   Future<List<Map<String, dynamic>>> searchGeocoding({
     required String query,
     required String kind,
+    String? cityId,
     String? settlement,
     double? lat,
     double? lng,
@@ -802,6 +872,7 @@ class TulparApiClient {
       if (lat != null) 'lat': lat.toString(),
       if (lng != null) 'lng': lng.toString(),
     };
+    if (cityId != null) parameters['cityId'] = cityId;
     final uri = Uri.parse(
       '$baseUrl/api/geocoding/search',
     ).replace(queryParameters: parameters);
@@ -953,11 +1024,59 @@ class TulparApiClient {
         .toList();
   }
 
+  Future<int> getChatUnreadCount(String orderId) async {
+    final raw = await _getApi('/api/orders/$orderId/messages/unread');
+    if (raw is! Map) return 0;
+    final count = raw['unreadCount'];
+    return count is int && count >= 0 ? count : 0;
+  }
+
+  Future<void> markChatRead(String orderId) async {
+    await _postApi('/api/orders/$orderId/messages/read', body: const {});
+  }
+
   Future<void> sendChatMessage({
     required String orderId,
     required String text,
   }) async {
     await _postApi('/api/orders/$orderId/messages', body: {'text': text});
+  }
+
+  Future<List<Map<String, dynamic>>> getIntercityChatMessages(
+    String bookingId,
+  ) async {
+    final raw = await _getApi('/api/intercity-bookings/$bookingId/messages');
+    final items = raw is Map ? raw['messages'] : null;
+    if (items is! List) return const [];
+    return items
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: false);
+  }
+
+  Future<int> getIntercityChatUnreadCount(String bookingId) async {
+    final raw = await _getApi(
+      '/api/intercity-bookings/$bookingId/messages/unread',
+    );
+    final count = raw is Map ? raw['unreadCount'] : null;
+    return count is int && count >= 0 ? count : 0;
+  }
+
+  Future<void> markIntercityChatRead(String bookingId) async {
+    await _postApi(
+      '/api/intercity-bookings/$bookingId/messages/read',
+      body: const {},
+    );
+  }
+
+  Future<void> sendIntercityChatMessage({
+    required String bookingId,
+    required String text,
+  }) async {
+    await _postApi(
+      '/api/intercity-bookings/$bookingId/messages',
+      body: {'text': text},
+    );
   }
 
   Future<void> submitRating({
@@ -1110,6 +1229,13 @@ class TulparApiClient {
         : const <String, dynamic>{};
   }
 
+  Future<Map<String, dynamic>> markIntercityPickupReached({
+    required String rideId,
+    required String bookingId,
+  }) => _postApi(
+    '/api/intercity-rides/$rideId/bookings/$bookingId/pickup-reached',
+  );
+
   Future<Map<String, dynamic>> cancelIntercityDriverRide(String rideId) =>
       _postApi('/api/intercity-rides/$rideId/cancel');
 
@@ -1142,16 +1268,74 @@ class TulparApiClient {
     await _decode(response);
   }
 
-  Future<Map<String, dynamic>> deleteCurrentAccount() =>
-      _deleteCurrentAccountRequest().timeout(_accountDeletionTimeout);
+  Future<Map<String, dynamic>> deleteCurrentAccount({String? password}) =>
+      _deleteCurrentAccountRequest(
+        password: password,
+      ).timeout(_accountDeletionTimeout);
 
-  Future<Map<String, dynamic>> _deleteCurrentAccountRequest() async {
+  Future<Map<String, dynamic>> _deleteCurrentAccountRequest({
+    String? password,
+  }) async {
     final response = await _sendAuthenticated(
-      (headers) =>
-          _client.delete(Uri.parse('$baseUrl/api/account'), headers: headers),
+      (headers) => _client.delete(
+        Uri.parse('$baseUrl/api/account'),
+        headers: headers,
+        body: password == null ? null : jsonEncode({'password': password}),
+      ),
     );
     return _decode(response);
   }
+
+  Future<Map<String, dynamic>> getTermsStatus() async {
+    final response = await _sendAuthenticated(
+      (headers) =>
+          _client.get(Uri.parse('$baseUrl/api/terms/status'), headers: headers),
+    ).timeout(const Duration(seconds: 8));
+    return _decode(response);
+  }
+
+  Future<Map<String, dynamic>> acceptTerms(String version) async {
+    final response = await _sendAuthenticated(
+      (headers) => _client.post(
+        Uri.parse('$baseUrl/api/terms/accept'),
+        headers: headers,
+        body: jsonEncode({'version': version}),
+      ),
+    ).timeout(const Duration(seconds: 8));
+    return _decode(response);
+  }
+
+  Future<Map<String, dynamic>> createContentReport({
+    String? reportedUserId,
+    required String contextType,
+    required String reasonCode,
+    String? reasonText,
+    String? orderId,
+    String? bookingId,
+    String? orderMessageId,
+    String? intercityMessageId,
+    String? reviewId,
+  }) {
+    final body = <String, dynamic>{
+      'contextType': contextType,
+      'reasonCode': reasonCode,
+    };
+    if (reportedUserId != null) body['reportedUserId'] = reportedUserId;
+    if (reasonText?.trim().isNotEmpty ?? false) {
+      body['reasonText'] = reasonText!.trim();
+    }
+    if (orderId != null) body['orderId'] = orderId;
+    if (bookingId != null) body['bookingId'] = bookingId;
+    if (orderMessageId != null) body['orderMessageId'] = orderMessageId;
+    if (intercityMessageId != null) {
+      body['intercityMessageId'] = intercityMessageId;
+    }
+    if (reviewId != null) body['reviewId'] = reviewId;
+    return _postApi('/api/compliance/reports', body: body);
+  }
+
+  Future<Map<String, dynamic>> blockUser(String userId) =>
+      _postApi('/api/compliance/blocks', body: {'blockedUserId': userId});
 }
 
 void _addIntercityPickup(

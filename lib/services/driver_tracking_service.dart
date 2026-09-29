@@ -39,13 +39,17 @@ class DriverTrackingService {
     if (_isDisposed) {
       return const DriverTrackingResult.failure(
         'тслеживание геопозиции уже остановлено.',
+        failure: DriverTrackingFailure.stopped,
       );
     }
 
     final session = ++_trackingSession;
 
     if (!_identity.isAuthenticated) {
-      return const DriverTrackingResult.failure('ойдите в аккаунт водителя.');
+      return const DriverTrackingResult.failure(
+        'Войдите в аккаунт водителя.',
+        failure: DriverTrackingFailure.signIn,
+      );
     }
 
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -53,11 +57,15 @@ class DriverTrackingService {
     if (!_isSessionActive(session)) {
       return const DriverTrackingResult.failure(
         'тслеживание геопозиции остановлено.',
+        failure: DriverTrackingFailure.stopped,
       );
     }
 
     if (!serviceEnabled) {
-      return const DriverTrackingResult.failure('ключите службы геолокации.');
+      return const DriverTrackingResult.failure(
+        'Включите службы геолокации.',
+        failure: DriverTrackingFailure.servicesDisabled,
+      );
     }
 
     var permission = await Geolocator.checkPermission();
@@ -65,6 +73,7 @@ class DriverTrackingService {
     if (!_isSessionActive(session)) {
       return const DriverTrackingResult.failure(
         'тслеживание геопозиции остановлено.',
+        failure: DriverTrackingFailure.stopped,
       );
     }
 
@@ -74,12 +83,14 @@ class DriverTrackingService {
       if (!_isSessionActive(session)) {
         return const DriverTrackingResult.failure(
           'тслеживание геопозиции остановлено.',
+          failure: DriverTrackingFailure.stopped,
         );
       }
 
       if (permission == LocationPermission.denied) {
         return const DriverTrackingResult.failure(
           'азрешите доступ к геолокации.',
+          failure: DriverTrackingFailure.permissionDenied,
         );
       }
     }
@@ -87,6 +98,7 @@ class DriverTrackingService {
     if (permission == LocationPermission.deniedForever) {
       return const DriverTrackingResult.failure(
         'оступ к геолокации отключён в настройках.',
+        failure: DriverTrackingFailure.settingsDenied,
       );
     }
 
@@ -99,6 +111,7 @@ class DriverTrackingService {
     if (!_isSessionActive(session)) {
       return const DriverTrackingResult.failure(
         'тслеживание геопозиции остановлено.',
+        failure: DriverTrackingFailure.stopped,
       );
     }
 
@@ -111,24 +124,32 @@ class DriverTrackingService {
       ),
     );
 
+    Position position;
     try {
-      final position = await Geolocator.getCurrentPosition();
+      position = await Geolocator.getCurrentPosition();
 
       if (!_isSessionActive(session)) {
         return const DriverTrackingResult.failure(
           'тслеживание геопозиции остановлено.',
+          failure: DriverTrackingFailure.stopped,
         );
       }
-
-      _publishPosition(position);
-
-      await _serverWriter!.writeImmediately(position);
     } catch (error) {
-      debugPrint('[DriverTracking] initial position failed: $error');
+      debugPrint('[DriverTracking] initial GPS failed: $error');
 
       return const DriverTrackingResult.failure(
         'е удалось получить или отправить текущую геопозицию.',
+        failure: DriverTrackingFailure.positionFailed,
       );
+    }
+
+    _publishPosition(position);
+    try {
+      await _serverWriter!.writeImmediately(position);
+    } catch (error) {
+      // A transient first HTTP failure must not stop the GPS stream. The
+      // throttler keeps this latest point and retries it after the interval.
+      debugPrint('[DriverTracking] initial server write failed: $error');
     }
 
     _positionStreamSubscription =
@@ -298,6 +319,12 @@ class LatestValueWriteThrottler<T> {
 
     try {
       await activeWrite;
+    } catch (_) {
+      if (!_isClosed && !_hasPendingValue) {
+        _pendingValue = value;
+        _hasPendingValue = true;
+      }
+      rethrow;
     } finally {
       _activeWrite = null;
       _isWriteInProgress = false;
@@ -331,12 +358,22 @@ class LatestValueWriteThrottler<T> {
   }
 }
 
-class DriverTrackingResult {
-  const DriverTrackingResult.started() : message = null;
+enum DriverTrackingFailure {
+  stopped,
+  signIn,
+  servicesDisabled,
+  permissionDenied,
+  settingsDenied,
+  positionFailed,
+}
 
-  const DriverTrackingResult.failure(this.message);
+class DriverTrackingResult {
+  const DriverTrackingResult.started() : message = null, failure = null;
+
+  const DriverTrackingResult.failure(this.message, {required this.failure});
 
   final String? message;
+  final DriverTrackingFailure? failure;
 
   bool get isStarted => message == null;
 }

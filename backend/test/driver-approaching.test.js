@@ -36,6 +36,14 @@ function appFor({
   const pool = {
     async query(sql, values = []) {
       const query = String(sql).replace(/\s+/g, ' ').trim();
+      if (query.startsWith('UPDATE orders o SET status = \'driver_arrived\'')) {
+        if (state.status !== 'accepted' || values[1] !== 'driver') return { rows: [] };
+        state.status = 'driver_arrived';
+        return { rows: [{
+          id: values[0], status: state.status,
+          driver_arrived_at: new Date(), passenger_uid: state.passengerUid,
+        }] };
+      }
       if (query.startsWith('WITH eligible AS')) {
         assert.match(query, /o\.pickup_lat/);
         assert.match(query, /o\.pickup_lng/);
@@ -143,6 +151,21 @@ test('250m does not notify; first <=200m sample notifies current passenger', asy
     type: 'driver_approaching_pickup',
     orderId: 'order-current',
   });
+});
+
+test('arrived is independent of approaching and sent once', async () => {
+  const { app, state } = appFor();
+  await location(app, 190);
+  assert.equal(state.pushes.length, 1);
+  const first = await request(app).post('/api/orders/order-current/arrive');
+  assert.equal(first.status, 200);
+  assert.equal(state.pushes.length, 2);
+  assert.deepEqual(state.pushes[1].payload.data, {
+    type: 'driver_arrived', orderId: 'order-current',
+  });
+  const repeat = await request(app).post('/api/orders/order-current/arrive');
+  assert.equal(repeat.status, 409);
+  assert.equal(state.pushes.length, 2);
 });
 
 test('210 -> 190m notifies once and later inside samples stay silent', async () => {

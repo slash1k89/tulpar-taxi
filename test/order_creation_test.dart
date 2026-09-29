@@ -4,9 +4,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:taxi_esil/services/order_creation_service.dart';
+import 'package:taxi_esil/services/tulpar_api_client.dart';
 import 'package:taxi_esil/widgets/order_creation_error_snackbar.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 void main() {
+  test('city order API payload carries the selected city', () {
+    final payload = buildOrderCreationPayload(
+      serviceType: 'city',
+      cityId: 'arkalyk',
+      passengerPrice: 800,
+      pickupAddress: 'A',
+      destinationAddress: 'B',
+      pickupLat: 50.25,
+      pickupLng: 66.91,
+      destinationLat: 50.26,
+      destinationLng: 66.92,
+    );
+    expect(payload['cityId'], 'arkalyk');
+  });
   const from = LatLng(51.957, 66.404);
   const to = LatLng(51.969, 66.421);
 
@@ -58,6 +74,9 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Builder(
           builder: (context) => Scaffold(
             body: ElevatedButton(
@@ -72,10 +91,7 @@ void main() {
     await tester.tap(find.text('Создать'));
     await tester.pump();
 
-    expect(
-      find.text('Не удалось создать заказ. Проверьте вход в аккаунт.'),
-      findsOneWidget,
-    );
+    expect(find.text('Нет доступа к созданию заказа.'), findsOneWidget);
     expect(find.textContaining('converted Future'), findsNothing);
   });
 
@@ -165,6 +181,9 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: ElevatedButton(
             onPressed: () {

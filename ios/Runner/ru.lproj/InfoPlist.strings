@@ -1,0 +1,2 @@
+"CFBundleDisplayName" = "MEKEN";
+"NSLocationWhenInUseUsageDescription" = "MEKEN использует геопозицию для выбора точки подачи, построения маршрута и передачи позиции водителя во время активной поездки.";

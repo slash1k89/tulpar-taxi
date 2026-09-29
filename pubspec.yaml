@@ -1,5 +1,5 @@
 name: taxi_esil
-description: "A new Flutter project."
+description: "MEKEN passenger, driver, delivery, and intercity transport app."
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -10,6 +10,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: ^0.20.2
   cupertino_icons: ^1.0.8
   flutter_map: ^8.0.0
   flutter_map_maplibre: ^0.0.5
@@ -28,6 +31,7 @@ dependencies:
   flutter_secure_storage: ^11.0.0
   flutter_tts: ^4.2.5
   audioplayers: 6.5.1
+  wakelock_plus: ^1.7.0
 
 dev_dependencies:
   flutter_test:
@@ -36,7 +40,12 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  generate: true
   assets:
     - assets/splash.mp4
     - assets/logo.png
+    - assets/meken_logo_transparent.png
     - assets/audio/navigation/
+    - assets/audio/navigation/ru/
+    - assets/audio/navigation/kk/
+    - assets/audio/navigation/en/

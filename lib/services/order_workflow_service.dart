@@ -81,11 +81,28 @@ class OrderWorkflowService {
     }
   }
 
-  Future<void> cancelOrder(String orderId) async {
+  Future<List<Map<String, dynamic>>> advanceOrderStop(String orderId) async {
+    _requireUser();
+    try {
+      return await _apiClient.advanceOrderStop(orderId);
+    } on TulparApiException catch (error) {
+      throw OrderWorkflowException(_messageForApiError(error));
+    }
+  }
+
+  Future<void> cancelOrder(
+    String orderId, {
+    String? reasonCode,
+    String? reasonText,
+  }) async {
     _requireUser();
 
     try {
-      await _apiClient.cancelOrder(orderId);
+      await _apiClient.cancelOrder(
+        orderId,
+        reasonCode: reasonCode,
+        reasonText: reasonText,
+      );
     } on TulparApiException catch (error) {
       throw OrderWorkflowException(_messageForApiError(error));
     }

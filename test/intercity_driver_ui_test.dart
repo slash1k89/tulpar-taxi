@@ -9,10 +9,12 @@ import 'package:taxi_esil/screens/driver/driver_intercity_mode_screen.dart';
 import 'package:taxi_esil/screens/driver/intercity_create_ride_screen.dart';
 import 'package:taxi_esil/screens/driver/intercity_driver_ride_details_screen.dart';
 import 'package:taxi_esil/screens/driver/intercity_driver_rides_screen.dart';
+import 'package:taxi_esil/screens/driver_navigation_screen.dart';
 import 'package:taxi_esil/services/geocoding_service.dart';
 import 'package:taxi_esil/services/intercity_ride_service.dart';
 import 'package:taxi_esil/services/tulpar_api_client.dart';
 import 'package:taxi_esil/widgets/intercity_ride_fields.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 void main() {
   testWidgets(
@@ -20,6 +22,9 @@ void main() {
     (tester) async {
       await tester.pumpWidget(
         MaterialApp(
+          locale: const Locale('ru'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: DriverIntercityModeScreen(
             ordersBuilder: (_) => const Scaffold(body: Text('old-orders')),
             ridesBuilder: (_) => const Scaffold(body: Text('driver-rides')),
@@ -42,6 +47,9 @@ void main() {
     final repository = _DriverRepository();
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityCreateRideScreen(
           repository: repository,
           initialOrigin: _origin,
@@ -135,7 +143,12 @@ void main() {
     final pending = Completer<List<IntercityRide>>();
     final repository = _DriverRepository(ridesFuture: pending.future);
     await tester.pumpWidget(
-      MaterialApp(home: IntercityDriverRidesScreen(repository: repository)),
+      MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: IntercityDriverRidesScreen(repository: repository),
+      ),
     );
     expect(find.byKey(const Key('driver_rides_loading')), findsOneWidget);
     pending.complete(const []);
@@ -152,6 +165,9 @@ void main() {
     ];
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityDriverRidesScreen(
           key: const ValueKey('retry-rides'),
           repository: repository,
@@ -213,6 +229,9 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityCreateRideScreen(
           repository: _DriverRepository(),
           ride: _ride(),
@@ -262,11 +281,18 @@ void main() {
   ) async {
     final repository = _DriverRepository(rideState: _ride());
     await _pumpDetails(tester, repository);
-    await _confirmAction(tester, 'depart');
+    await _confirmAction(tester, 'depart', settleAfter: false);
     expect(repository.departCalls, 1);
-    expect(find.text('В пути'), findsOneWidget);
+    expect(find.byType(DriverNavigationScreen), findsOneWidget);
+    Navigator.of(tester.element(find.byType(DriverNavigationScreen))).pop();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('driver_ride_continue')), findsOneWidget);
     expect(find.byKey(const Key('driver_ride_complete')), findsOneWidget);
-    await _confirmAction(tester, 'complete');
+    await _confirmAction(tester, 'complete', settleAfter: false);
+    for (var attempt = 0; attempt < 20; attempt++) {
+      await tester.pump(const Duration(milliseconds: 100));
+      if (repository.completeCalls == 1) break;
+    }
     expect(repository.completeCalls, 1);
     expect(find.text('Завершена'), findsOneWidget);
     expect(find.byKey(const Key('driver_ride_complete')), findsNothing);
@@ -279,6 +305,9 @@ void main() {
       );
       await tester.pumpWidget(
         MaterialApp(
+          locale: const Locale('ru'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: IntercityDriverRideDetailsScreen(
             repository: repository,
             rideId: 'ride-1',
@@ -314,6 +343,9 @@ Future<void> _pumpCreate(
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      locale: const Locale('ru'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: IntercityCreateRideScreen(
         repository: repository,
         initialOrigin: _origin,
@@ -331,6 +363,9 @@ Future<void> _pumpDetails(
 ) async {
   await tester.pumpWidget(
     MaterialApp(
+      locale: const Locale('ru'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: IntercityDriverRideDetailsScreen(
         repository: repository,
         rideId: 'ride-1',
@@ -340,12 +375,26 @@ Future<void> _pumpDetails(
   await tester.pumpAndSettle();
 }
 
-Future<void> _confirmAction(WidgetTester tester, String action) async {
+Future<void> _confirmAction(
+  WidgetTester tester,
+  String action, {
+  bool settleAfter = true,
+}) async {
   final button = find.byKey(Key('driver_ride_$action'));
   await _tapVisible(tester, button);
   await tester.pumpAndSettle();
   await tester.tap(find.byKey(Key('driver_ride_${action}_confirm')));
-  await tester.pumpAndSettle();
+  if (settleAfter) {
+    await tester.pumpAndSettle();
+  } else {
+    // Navigation intentionally keeps an indeterminate loading indicator while
+    // the native GPS plugin obtains the first position. A widget test must not
+    // wait for that continuously animated indicator to settle.
+    for (var attempt = 0; attempt < 20; attempt++) {
+      await tester.pump(const Duration(milliseconds: 100));
+      if (find.byType(DriverNavigationScreen).evaluate().isNotEmpty) break;
+    }
+  }
 }
 
 Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
@@ -510,4 +559,10 @@ class _DriverRepository implements IntercityDriverRideRepository {
     rideState = _ride(status: IntercityRideStatus.completed);
     return rideState;
   }
+
+  @override
+  Future<IntercityRideBooking> markPickupReached({
+    required String rideId,
+    required String bookingId,
+  }) async => bookings.firstWhere((item) => item.bookingId == bookingId);
 }

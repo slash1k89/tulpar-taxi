@@ -6,6 +6,7 @@ import '../../services/intercity_ride_service.dart';
 import '../../utils/intercity_ride_formatters.dart';
 import 'intercity_request_screen.dart';
 import 'intercity_ride_details_screen.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 class IntercityRideResultsScreen extends StatefulWidget {
   const IntercityRideResultsScreen({
@@ -49,7 +50,9 @@ class _IntercityRideResultsScreenState
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Подходящие поездки')),
+    appBar: AppBar(
+      title: Text(AppLocalizations.of(context).intercityMatchingTrips),
+    ),
     body: FutureBuilder<List<IntercityRide>>(
       future: _rides,
       builder: (context, snapshot) {
@@ -63,8 +66,8 @@ class _IntercityRideResultsScreenState
           return _ResultsMessage(
             key: const Key('intercity_results_error'),
             icon: Icons.cloud_off_outlined,
-            title: 'Не удалось загрузить поездки',
-            actionLabel: 'Повторить',
+            title: AppLocalizations.of(context).intercityTripsLoadFailed,
+            actionLabel: AppLocalizations.of(context).retry,
             onAction: _retry,
           );
         }
@@ -73,8 +76,8 @@ class _IntercityRideResultsScreenState
           return _ResultsMessage(
             key: const Key('intercity_results_empty'),
             icon: Icons.route_outlined,
-            title: 'Подходящих поездок пока нет',
-            actionLabel: 'Оставить заявку',
+            title: AppLocalizations.of(context).intercityNoTrips,
+            actionLabel: AppLocalizations.of(context).intercityLeaveRequest,
             onAction: () => Navigator.push(
               context,
               MaterialPageRoute(
@@ -174,12 +177,16 @@ class IntercityRideCard extends StatelessWidget {
             ],
             const SizedBox(height: 8),
             Text(
-              'Свободно: ${ride.availableSeats} мест',
+              AppLocalizations.of(
+                context,
+              ).intercityAvailableSeats(ride.availableSeats),
               key: Key('intercity_available_${ride.rideId}'),
             ),
             const SizedBox(height: 6),
             Text(
-              '${formatTenge(ride.pricePerSeat)} / место',
+              AppLocalizations.of(
+                context,
+              ).intercityPerSeat(formatTenge(ride.pricePerSeat)),
               key: Key('intercity_price_per_seat_${ride.rideId}'),
               style: Theme.of(
                 context,
@@ -191,7 +198,7 @@ class IntercityRideCard extends StatelessWidget {
               child: OutlinedButton(
                 key: Key('intercity_details_${ride.rideId}'),
                 onPressed: onDetails,
-                child: const Text('Подробнее'),
+                child: Text(AppLocalizations.of(context).intercityDetails),
               ),
             ),
           ],

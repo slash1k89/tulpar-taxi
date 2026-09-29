@@ -19,6 +19,7 @@ function harness({ userId = 'passenger', status = 'queued' } = {}) {
     },
     offerStatus: 'pending',
     queries: [],
+    pushes: [],
   };
 
   const execute = async (sql, values = []) => {
@@ -49,6 +50,9 @@ function harness({ userId = 'passenger', status = 'queued' } = {}) {
         rows: [{ passenger_uid: 'passenger-uid', driver_uid: 'driver-uid' }],
       };
     }
+    if (query.startsWith('SELECT o.service_type,') && query.includes('JOIN users u ON u.id = o.driver_id')) {
+      return { rows: [{ service_type: 'city', identity_key: 'driver-uid' }] };
+    }
     throw new Error(`Unexpected query: ${query} ${values}`);
   };
 
@@ -61,7 +65,11 @@ function harness({ userId = 'passenger', status = 'queued' } = {}) {
     requireAuth(req, _res, next) { req.user = { uid: 'firebase-user' }; next(); },
     sendToUser() {},
     sendToAvailableDrivers() {},
-    async sendPushToUser() { return { successCount: 0, failureCount: 0 }; },
+    async sendPushToUser(uid, payload) {
+      assert.ok(state.queries.includes('COMMIT'));
+      state.pushes.push({ uid, payload });
+      return { successCount: 1, failureCount: 0 };
+    },
   }));
   return { app, state };
 }
@@ -75,6 +83,13 @@ test('owner passenger cancels only queued order and clears queued link', async (
   assert.equal(state.order.queued_after_order_id, null);
   assert.equal(state.current.status, 'in_progress');
   assert.equal(state.offerStatus, 'rejected');
+  assert.deepEqual(state.pushes, [{
+    uid: 'driver-uid',
+    payload: { data: { type: 'cancelled', orderId: 'next', serviceType: 'city' } },
+  }]);
+  const replay = await request(app).post('/api/orders/next/cancel');
+  assert.equal(replay.status, 409);
+  assert.equal(state.pushes.length, 1);
 });
 
 test('another passenger cannot cancel queued order', async () => {
@@ -83,6 +98,7 @@ test('another passenger cannot cancel queued order', async () => {
   assert.equal(response.status, 403);
   assert.equal(state.order.status, 'queued');
   assert.equal(state.current.status, 'in_progress');
+  assert.equal(state.pushes.length, 0);
 });
 
 test('driver cannot use passenger queued cancellation branch', async () => {

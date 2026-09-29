@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../utils/formatters.dart';
+import '../l10n/generated/app_localizations.dart';
 
 class DeliveryDetailsView extends StatelessWidget {
   const DeliveryDetailsView({
@@ -9,11 +10,13 @@ class DeliveryDetailsView extends StatelessWidget {
     required this.orderData,
     this.showLabel = true,
     this.enableRecipientCall = false,
+    this.onDarkCard = false,
   });
 
   final Map<String, dynamic> orderData;
   final bool showLabel;
   final bool enableRecipientCall;
+  final bool onDarkCard;
 
   static bool isDelivery(Map<String, dynamic> orderData) =>
       orderData['serviceType']?.toString() == 'delivery';
@@ -22,6 +25,10 @@ class DeliveryDetailsView extends StatelessWidget {
   Widget build(BuildContext context) {
     if (!isDelivery(orderData)) return const SizedBox.shrink();
     final colorScheme = Theme.of(context).colorScheme;
+    final primaryColor = onDarkCard ? Colors.white : colorScheme.onSurface;
+    final secondaryColor = onDarkCard
+        ? Colors.white70
+        : colorScheme.onSurfaceVariant;
 
     final rawDelivery = orderData['delivery'];
     final delivery = rawDelivery is Map
@@ -50,13 +57,13 @@ class DeliveryDetailsView extends StatelessWidget {
                 Icon(
                   Icons.local_shipping_outlined,
                   size: 17,
-                  color: colorScheme.onSurface,
+                  color: primaryColor,
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  'Доставка',
+                  AppLocalizations.of(context).serviceDelivery,
                   style: TextStyle(
-                    color: colorScheme.onSurface,
+                    color: primaryColor,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -68,24 +75,26 @@ class DeliveryDetailsView extends StatelessWidget {
         if (description.isNotEmpty)
           _DetailRow(
             icon: Icons.inventory_2_outlined,
-            label: 'Посылка: $description',
-            color: colorScheme.onSurface,
+            label: AppLocalizations.of(context).deliveryPackage(description),
+            color: primaryColor,
           ),
         if (recipientName.isNotEmpty)
           _DetailRow(
             icon: Icons.person_outline,
-            label: 'Получатель: $recipientName',
-            color: colorScheme.onSurfaceVariant,
+            label: AppLocalizations.of(
+              context,
+            ).deliveryRecipient(recipientName),
+            color: secondaryColor,
           ),
         if (recipientPhone.isNotEmpty)
           _DetailRow(
             icon: Icons.phone_outlined,
-            label: 'Телефон: $recipientPhone',
-            color: colorScheme.onSurfaceVariant,
+            label: AppLocalizations.of(context).deliveryPhone(recipientPhone),
+            color: secondaryColor,
             trailing: enableRecipientCall
                 ? IconButton(
                     visualDensity: VisualDensity.compact,
-                    tooltip: 'Позвонить получателю',
+                    tooltip: AppLocalizations.of(context).deliveryCallRecipient,
                     icon: const Icon(Icons.phone),
                     onPressed: () => _openDialer(context, recipientPhone),
                   )
@@ -94,8 +103,10 @@ class DeliveryDetailsView extends StatelessWidget {
         if (destinationApartment.isNotEmpty)
           _DetailRow(
             icon: Icons.apartment_outlined,
-            label: 'Квартира: $destinationApartment',
-            color: colorScheme.onSurfaceVariant,
+            label: AppLocalizations.of(
+              context,
+            ).deliveryApartment(destinationApartment),
+            color: secondaryColor,
           ),
       ],
     );
@@ -116,7 +127,9 @@ class DeliveryDetailsView extends StatelessWidget {
     }
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Не удалось открыть приложение звонков.')),
+        SnackBar(
+          content: Text(AppLocalizations.of(context).deliveryDialerFailed),
+        ),
       );
     }
   }

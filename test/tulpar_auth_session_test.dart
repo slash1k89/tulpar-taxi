@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:taxi_esil/screens/auth/login_screen.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 import 'package:taxi_esil/services/tulpar_api_client.dart';
 import 'package:taxi_esil/services/tulpar_auth_session.dart';
 
@@ -214,6 +215,9 @@ void main() {
     );
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: LoginScreen(
           authController: controller,
           activeOrderLoader: () async => null,
@@ -224,7 +228,11 @@ void main() {
       find.byKey(const Key('login_phone_field')),
       '+7 (700) 123-45-67',
     );
-    await tester.tap(find.byKey(const Key('flash_call_primary_button')));
+    final register = find.byKey(const Key('register_button'));
+    await tester.ensureVisible(register);
+    await tester.tap(register);
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('auth_primary_button')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('flash_call_code_field')), findsOneWidget);
     expect(find.textContaining('через 2 сек.'), findsOneWidget);

@@ -2,9 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taxi_esil/models/navigation_step.dart';
 import 'package:taxi_esil/services/navigation_audio_service.dart';
 import 'package:taxi_esil/services/navigation_voice_service.dart';
+import 'package:taxi_esil/services/locale_controller.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 NavigationStep _step({
   String type = 'turn',
@@ -138,7 +141,7 @@ void main() {
 
     test('arrival uses route finish', () {
       final cue = navigationAudioCue(_step(type: 'arrive'), 0, immediate: true);
-      expect(cue.assetPaths, ['audio/navigation/route_finish.mp3']);
+      expect(cue.assetPaths.single, endsWith('/route_finish.mp3'));
     });
   });
 
@@ -238,7 +241,9 @@ void main() {
       expect(output.cues, hasLength(1));
       expect(
         output.cues.single.assetPaths,
-        contains('audio/navigation/route_finish.mp3'),
+        contains(
+          'audio/navigation/${appLocaleController.effectiveLocale.languageCode}/route_finish.mp3',
+        ),
       );
       await controller.dispose();
     },
@@ -268,6 +273,20 @@ void main() {
     expect(player.overlapDetected, isFalse);
     expect(speaker.spoken, isEmpty);
     await service.dispose();
+  });
+
+  test('final arrival uses RU, KK and EN asset and fallback text', () async {
+    SharedPreferences.setMockInitialValues({});
+    for (final code in ['ru', 'kk', 'en']) {
+      await appLocaleController.choose(code);
+      final cue = navigationAudioCue(_step(type: 'arrive'), 0, immediate: true);
+      expect(cue.assetPaths, ['audio/navigation/$code/route_finish.mp3']);
+      expect(
+        cue.fallbackText,
+        lookupAppLocalizations(appLocaleController.effectiveLocale).navArrived,
+      );
+    }
+    await appLocaleController.choose('ru');
   });
 
   test('a newer instruction cancels the stale sequence', () async {

@@ -226,8 +226,26 @@ async function findBlocker(client, userId) {
   return null;
 }
 
-async function anonymizeUser(client, userId) {
+async function anonymizeUser(client, userId, phone) {
   await client.query('DELETE FROM user_push_tokens WHERE user_id = $1', [userId]);
+  await client.query('DELETE FROM auth_phone_identities WHERE user_id = $1', [userId]);
+  await client.query('DELETE FROM auth_sessions WHERE user_id = $1', [userId]);
+  await client.query(
+    `DELETE FROM auth_password_verifications
+      WHERE user_id = $1
+         OR ($2::text IS NOT NULL AND phone_normalized = $2)`,
+    [userId, phone],
+  );
+  await client.query(
+    `DELETE FROM auth_otp_challenges
+      WHERE $1::text IS NOT NULL AND phone_normalized = $1`,
+    [phone],
+  );
+  await client.query('DELETE FROM user_terms_acceptances WHERE user_id = $1', [userId]);
+  await client.query(
+    'DELETE FROM user_blocks WHERE blocker_user_id = $1 OR blocked_user_id = $1',
+    [userId],
+  );
   await client.query('DELETE FROM driver_profiles WHERE user_id = $1', [userId]);
   await client.query(
     `UPDATE order_offers SET status = 'withdrawn', updated_at = now()
@@ -248,6 +266,14 @@ async function anonymizeUser(client, userId) {
     [userId],
   );
   await client.query(
+    `UPDATE order_stops s
+        SET address = NULL, latitude = NULL, longitude = NULL
+       FROM orders o
+      WHERE s.order_id = o.id
+        AND (o.passenger_id = $1 OR o.driver_id = $1)`,
+    [userId],
+  );
+  await client.query(
     `UPDATE orders
         SET pickup_address = NULL, destination_address = NULL,
             pickup_lat = NULL, pickup_lng = NULL,
@@ -258,6 +284,11 @@ async function anonymizeUser(client, userId) {
   );
   await client.query(
     `UPDATE order_messages SET text = '[сообщение удалено]'
+      WHERE sender_id = $1`,
+    [userId],
+  );
+  await client.query(
+    `UPDATE intercity_booking_messages SET text = '[сообщение удалено]'
       WHERE sender_id = $1`,
     [userId],
   );
@@ -285,7 +316,10 @@ async function anonymizeUser(client, userId) {
     [userId],
   );
   await client.query(
-    `UPDATE intercity_rides SET comment = NULL, updated_at = now()
+    `UPDATE intercity_rides
+        SET origin_lat = NULL, origin_lng = NULL,
+            destination_lat = NULL, destination_lng = NULL,
+            comment = NULL, updated_at = now()
       WHERE driver_id = $1`,
     [userId],
   );
@@ -305,12 +339,61 @@ async function anonymizeUser(client, userId) {
   );
   await client.query(
     `UPDATE users
-        SET firebase_uid = NULL, phone = NULL, name = NULL,
+        SET firebase_uid = NULL, phone = NULL, name = NULL, password_hash = NULL,
             rating = 5.00, rating_sum = 0, rating_count = 0,
             account_status = 'deleted', deleted_at = now(), updated_at = now()
       WHERE id = $1`,
     [userId],
   );
+}
+
+export async function beginAccountDeletionByUserId({ pool, userId }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await acquireAccountLifecycleLock(client, `user:${userId}`);
+    const userResult = await client.query(
+      `SELECT id, firebase_uid, phone FROM users
+        WHERE id = $1 AND account_status = 'active' FOR UPDATE`,
+      [userId],
+    );
+    if (!userResult.rowCount) {
+      const existing = await client.query(
+        `SELECT id, user_id, firebase_uid, status FROM account_deletion_jobs
+          WHERE user_id = $1`,
+        [userId],
+      );
+      await client.query('COMMIT');
+      if (!existing.rowCount) return { kind: 'not_found' };
+      return { kind: 'existing', job: existing.rows[0] };
+    }
+    const user = userResult.rows[0];
+    const blocker = await findBlocker(client, user.id);
+    if (blocker) {
+      await client.query('ROLLBACK');
+      return { kind: 'blocked', code: blocker };
+    }
+    const identity = user.firebase_uid ?? `tulpar-user:${user.id}`;
+    const remoteDeletionRequired = Boolean(user.firebase_uid);
+    const jobResult = await client.query(
+      `INSERT INTO account_deletion_jobs (
+        user_id, firebase_uid_hash, firebase_uid, status, completed_at
+       ) VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (user_id) DO UPDATE SET updated_at = now()
+       RETURNING id, user_id, firebase_uid, status`,
+      [user.id, firebaseUidHash(identity), user.firebase_uid,
+        remoteDeletionRequired ? 'pending' : 'completed',
+        remoteDeletionRequired ? null : new Date()],
+    );
+    await anonymizeUser(client, user.id, user.phone);
+    await client.query('COMMIT');
+    return { kind: 'created', job: jobResult.rows[0] };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function beginAccountDeletion({ pool, firebaseUid }) {
@@ -320,7 +403,7 @@ export async function beginAccountDeletion({ pool, firebaseUid }) {
     await client.query('BEGIN');
     await acquireAccountLifecycleLock(client, firebaseUid);
     const userResult = await client.query(
-      `SELECT id FROM users
+      `SELECT id, phone FROM users
         WHERE firebase_uid = $1 AND account_status = 'active'
         FOR UPDATE`,
       [firebaseUid],
@@ -339,6 +422,7 @@ export async function beginAccountDeletion({ pool, firebaseUid }) {
     }
 
     const userId = userResult.rows[0].id;
+    const phone = userResult.rows[0].phone;
     const blocker = await findBlocker(client, userId);
     if (blocker !== null) {
       await client.query('ROLLBACK');
@@ -353,7 +437,7 @@ export async function beginAccountDeletion({ pool, firebaseUid }) {
        RETURNING id, user_id, firebase_uid, status`,
       [userId, uidHash, firebaseUid],
     );
-    await anonymizeUser(client, userId);
+    await anonymizeUser(client, userId, phone);
     await client.query('COMMIT');
     return { kind: 'created', job: jobResult.rows[0] };
   } catch (error) {

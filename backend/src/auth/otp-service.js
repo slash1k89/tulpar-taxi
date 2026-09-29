@@ -172,15 +172,18 @@ export class OtpChallengeService {
     provider,
     requestCode,
     metadata = {},
+    purpose = 'login',
   } = {}) {
     const normalizedPhone = normalizeKazakhstanPhone(phone);
+    if (!['login', 'setup', 'reset'].includes(purpose)) {
+      throw new OtpChallengeError('unsupported_purpose');
+    }
     if (method !== 'flash_call' || provider !== 'autocall') {
       throw new OtpChallengeError('unsupported_method');
     }
     if (typeof requestCode !== 'function') {
       throw new OtpChallengeError('provider_unavailable');
     }
-    const purpose = 'login';
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -275,10 +278,13 @@ export class OtpChallengeService {
     return this.verifyChallenge(challengeId, phone, code, { method: 'sms' });
   }
 
-  async verifyChallenge(challengeId, phone, code, { method } = {}) {
+  async verifyChallenge(challengeId, phone, code, { method, purpose = 'login' } = {}) {
     const normalizedPhone = normalizeKazakhstanPhone(phone);
     if (!['sms', 'flash_call'].includes(method)) {
       throw new OtpChallengeError('unsupported_method');
+    }
+    if (!['login', 'setup', 'reset'].includes(purpose)) {
+      throw new OtpChallengeError('unsupported_purpose');
     }
     validateCode(code, method);
     const client = await this.pool.connect();
@@ -289,10 +295,10 @@ export class OtpChallengeService {
         `SELECT id, phone_normalized, code_hash, purpose, method, expires_at,
                 consumed_at, attempts_count, max_attempts
            FROM auth_otp_challenges
-          WHERE id = $1 AND phone_normalized = $2 AND purpose = 'login'
+          WHERE id = $1 AND phone_normalized = $2 AND purpose = $4
             AND method = $3
           FOR UPDATE`,
-        [challengeId, normalizedPhone, method],
+        [challengeId, normalizedPhone, method, purpose],
       );
       const challenge = result.rows[0];
       if (!challenge) throw new OtpChallengeError('challenge_not_found');
@@ -306,7 +312,7 @@ export class OtpChallengeService {
       const candidateHash = otpHash({
         challengeId,
         phone: normalizedPhone,
-        purpose: 'login',
+        purpose,
         method,
         code,
         secret: this.secret,

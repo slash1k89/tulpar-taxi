@@ -6,8 +6,13 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../models/order_service_type.dart';
+import '../../app_routes.dart';
+import '../../services/active_order_service.dart';
+import '../../widgets/city_order_cancellation_dialog.dart';
 import '../../models/next_order.dart';
 import '../../screens/chat/chat_screen.dart';
+import '../../widgets/chat_unread_badge.dart';
+import '../../widgets/order_stops_view.dart';
 import '../../widgets/rating_dialog.dart';
 import '../../widgets/driver_location_marker_layer.dart';
 import '../../widgets/navigation_overlay.dart';
@@ -21,27 +26,96 @@ import '../../services/route_service.dart'; // Переиспользуем се
 import '../../services/order_workflow_service.dart';
 import '../../services/order_offer_service.dart';
 import '../../services/driver_tracking_service.dart';
+import '../../services/address_label_service.dart';
 import '../../services/driver_next_order_transition.dart';
 import '../../services/next_order_candidate_controller.dart';
 import '../../services/tulpar_api_client.dart';
 import '../../services/navigation_reroute_controller.dart';
 import '../../services/navigation_camera_controller.dart';
+import '../../services/driver_trip_wakelock_controller.dart';
 import '../../services/navigation_route_trimmer.dart';
 import '../../services/navigation_voice_service.dart';
 import '../../services/voice_guidance_settings.dart';
 import '../../models/navigation_step.dart';
+import '../../models/order_stops.dart';
+import '../../l10n/generated/app_localizations.dart';
 
-LatLng driverRouteDestination(
+class DriverRoutePlan {
+  const DriverRoutePlan({
+    required this.destination,
+    this.intermediatePoints = const [],
+  });
+
+  final LatLng destination;
+  final List<LatLng> intermediatePoints;
+
+  List<LatLng> get orderedRemainingPoints => [
+    ...intermediatePoints,
+    destination,
+  ];
+}
+
+DriverRoutePlan driverRoutePlan(
   Map<String, dynamic> orderData, {
   String? statusOverride,
 }) {
   final status =
       statusOverride ?? orderData['status']?.toString() ?? 'accepted';
   final useDestination = status == 'in_progress';
-  return LatLng(
-    (orderData[useDestination ? 'toLat' : 'fromLat'] as num).toDouble(),
-    (orderData[useDestination ? 'toLng' : 'fromLng'] as num).toDouble(),
+  if (useDestination) {
+    final pending = <({LatLng point, int sequence, int fallbackIndex})>[];
+    final stops = orderStopsFromData(orderData);
+    for (var index = 0; index < stops.length; index++) {
+      final stop = stops[index];
+      if (!stop.isReached) {
+        final lat = stop.raw['latitude'] ?? stop.raw['lat'];
+        final lng = stop.raw['longitude'] ?? stop.raw['lng'];
+        if (lat is num && lng is num) {
+          pending.add((
+            point: LatLng(lat.toDouble(), lng.toDouble()),
+            sequence: stop.sequence,
+            fallbackIndex: index,
+          ));
+        }
+      }
+    }
+    pending.sort((left, right) {
+      final bySequence = left.sequence.compareTo(right.sequence);
+      return bySequence != 0
+          ? bySequence
+          : left.fallbackIndex.compareTo(right.fallbackIndex);
+    });
+    if (pending.isNotEmpty) {
+      final points = pending.map((entry) => entry.point).toList();
+      return DriverRoutePlan(
+        destination: points.last,
+        intermediatePoints: List.unmodifiable(points.take(points.length - 1)),
+      );
+    }
+  }
+  return DriverRoutePlan(
+    destination: LatLng(
+      (orderData[useDestination ? 'toLat' : 'fromLat'] as num).toDouble(),
+      (orderData[useDestination ? 'toLng' : 'fromLng'] as num).toDouble(),
+    ),
   );
+}
+
+LatLng driverRouteDestination(
+  Map<String, dynamic> orderData, {
+  String? statusOverride,
+}) {
+  final plan = driverRoutePlan(orderData, statusOverride: statusOverride);
+  return plan.intermediatePoints.isEmpty
+      ? plan.destination
+      : plan.intermediatePoints.first;
+}
+
+bool hasPendingIntermediateStop(Map<String, dynamic> orderData) {
+  final pending = orderStopsFromData(
+    orderData,
+  ).where((stop) => !stop.isReached).length;
+  return pending > 1;
 }
 
 bool driverRouteContextChanged({
@@ -51,7 +125,13 @@ bool driverRouteContextChanged({
   required Map<String, dynamic> newOrderData,
 }) =>
     oldOrderId != newOrderId ||
-    oldOrderData['status']?.toString() != newOrderData['status']?.toString();
+    oldOrderData['status']?.toString() != newOrderData['status']?.toString() ||
+    orderStopsFromData(
+          oldOrderData,
+        ).map((stop) => '${stop.sequence}:${stop.reachedAt}').join('|') !=
+        orderStopsFromData(
+          newOrderData,
+        ).map((stop) => '${stop.sequence}:${stop.reachedAt}').join('|');
 
 bool driverStatusSupportsNavigation(Object? status) => {
   'accepted',
@@ -59,6 +139,75 @@ bool driverStatusSupportsNavigation(Object? status) => {
   'arrived',
   'in_progress',
 }.contains(status?.toString());
+
+const double navigationVehicleVerticalFraction = 0.64;
+
+bool navigationUsesFixedVehicleMarker({
+  required bool following,
+  required bool hasActiveNavigation,
+}) => following && hasActiveNavigation;
+
+bool navigationShouldRestoreCameraOnResume({
+  required bool following,
+  required bool hasActiveNavigation,
+}) => following && hasActiveNavigation;
+
+bool navigationMapEventDisablesFollow(MapEventSource source) => const {
+  MapEventSource.dragStart,
+  MapEventSource.onDrag,
+  MapEventSource.dragEnd,
+  MapEventSource.multiFingerGestureStart,
+  MapEventSource.onMultiFinger,
+  MapEventSource.multiFingerEnd,
+  MapEventSource.doubleTap,
+  MapEventSource.doubleTapHold,
+  MapEventSource.doubleTapZoomAnimationController,
+  MapEventSource.flingAnimationController,
+  MapEventSource.scrollWheel,
+  MapEventSource.cursorKeyboardRotation,
+  MapEventSource.keyboard,
+}.contains(source);
+
+Offset navigationCameraOffset(Size mapSize) =>
+    Offset(0, mapSize.height * (navigationVehicleVerticalFraction - 0.5));
+
+class FixedNavigationVehicleMarker extends StatelessWidget {
+  const FixedNavigationVehicleMarker({
+    super.key,
+    required this.marker,
+    this.gpsPosition,
+  });
+
+  final Widget marker;
+
+  /// Kept for diagnostics and tests. GPS changes navigation state, but never
+  /// participates in this overlay's screen-space layout.
+  final LatLng? gpsPosition;
+
+  @override
+  Widget build(BuildContext context) => Positioned.fill(
+    key: const Key('driver_fixed_vehicle_marker'),
+    child: IgnorePointer(
+      child: LayoutBuilder(
+        builder: (context, constraints) => Stack(
+          children: [
+            Positioned(
+              left:
+                  (constraints.maxWidth - TulparMapVisuals.vehicleMarkerSize) /
+                  2,
+              top:
+                  constraints.maxHeight * navigationVehicleVerticalFraction -
+                  TulparMapVisuals.vehicleMarkerSize / 2,
+              width: TulparMapVisuals.vehicleMarkerSize,
+              height: TulparMapVisuals.vehicleMarkerSize,
+              child: marker,
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
 
 class DriverRouteRequestState {
   int _generation = 0;
@@ -132,7 +281,7 @@ class DriverMapScreen extends StatefulWidget {
 }
 
 class _DriverMapScreenState extends State<DriverMapScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final MapController _mapController = MapController();
   final DriverRouteRequestState _routeState = DriverRouteRequestState();
   final DriverTrackingService _tracking = DriverTrackingService();
@@ -143,10 +292,17 @@ class _DriverMapScreenState extends State<DriverMapScreen>
   final NavigationRouteTrimmer _routeTrimmer = NavigationRouteTrimmer();
   final NavigationVoiceController _voiceController =
       NavigationVoiceController();
+  final TulparMapCameraBridge _mapCameraBridge = TulparMapCameraBridge();
+  final DriverTripWakelockController _wakelockController =
+      DriverTripWakelockController();
   late final NextOrderCandidateController _nextOrderController;
   late final DriverNextOrderTransition _nextOrderTransition;
   final OrderOfferService _offerService = OrderOfferService();
   String? _trackingMessage;
+  bool _cancellingCityOrder = false;
+  bool _cityCancellationHandled = false;
+  bool _checkingRemoteCityCancellation = false;
+  Timer? _cityCancellationPoll;
   bool get _followDriver => _cameraController.following;
   late final AnimationController _cameraAnimation = AnimationController(
     vsync: this,
@@ -155,12 +311,21 @@ class _DriverMapScreenState extends State<DriverMapScreen>
   LatLng? _cameraPosition;
   bool _isMapReady = false;
   bool _isOrderPanelExpanded = true;
+  int _activeMapPointers = 0;
+  late final NavigationFollowResumeTimer _followResume =
+      NavigationFollowResumeTimer(
+        canResume: () =>
+            mounted && _hasActiveNavigation && _activeMapPointers == 0,
+        onResume: _resumeFollowing,
+      );
 
   static const double _navigationZoom = 16.5;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _wakelockController.start(widget.orderData['status']);
     _tracking.positionListenable.addListener(_handleDriverPosition);
     appVoiceGuidanceSettings.addListener(_handleVoiceSettingChanged);
     unawaited(appVoiceGuidanceSettings.load());
@@ -172,6 +337,46 @@ class _DriverMapScreenState extends State<DriverMapScreen>
     );
     _nextOrderController.updateOrder(widget.orderData);
     _startTracking();
+    if (widget.orderData['serviceType'] == 'city') {
+      _cityCancellationPoll = Timer.periodic(const Duration(seconds: 3), (_) {
+        unawaited(_checkRemoteCityCancellation());
+      });
+    }
+  }
+
+  Future<void> _checkRemoteCityCancellation() async {
+    if (_checkingRemoteCityCancellation ||
+        _cityCancellationHandled ||
+        !mounted) {
+      return;
+    }
+    _checkingRemoteCityCancellation = true;
+    try {
+      final details = await TulparApiClient().getOrderDetails(widget.orderId);
+      if (details['status'] == 'cancelled' && mounted) {
+        await _finishCancelledCityOrder();
+      }
+    } catch (_) {
+      // A transient network failure is not a confirmed cancellation.
+    } finally {
+      _checkingRemoteCityCancellation = false;
+    }
+  }
+
+  Future<void> _finishCancelledCityOrder() async {
+    if (_cityCancellationHandled) return;
+    _cityCancellationHandled = true;
+    _cityCancellationPoll?.cancel();
+    _followResume.cancel();
+    _routeState.invalidate();
+    _rerouteController.reset();
+    _wakelockController.updateStatus('cancelled');
+    await _tracking.stopLocationUpdates(widget.orderId);
+    ActiveOrderService.clearRememberedOrder();
+    if (!mounted) return;
+    Navigator.of(
+      context,
+    ).pushNamedAndRemoveUntil(AppRoutes.driverTaxi, (_) => false);
   }
 
   void _handleNextOrderChanged() {
@@ -185,12 +390,26 @@ class _DriverMapScreenState extends State<DriverMapScreen>
   Future<void> _startTracking() async {
     final result = await _tracking.startLocationUpdates(widget.orderId);
     if (mounted && !result.isStarted) {
-      setState(() => _trackingMessage = result.message);
+      final l10n = AppLocalizations.of(context);
+      setState(
+        () => _trackingMessage = switch (result.failure) {
+          DriverTrackingFailure.stopped => l10n.trackingStopped,
+          DriverTrackingFailure.signIn => l10n.trackingSignIn,
+          DriverTrackingFailure.servicesDisabled => l10n.trackingEnableServices,
+          DriverTrackingFailure.permissionDenied => l10n.trackingAllowLocation,
+          DriverTrackingFailure.settingsDenied => l10n.trackingAllowInSettings,
+          DriverTrackingFailure.positionFailed ||
+          null => l10n.trackingPositionFailed,
+        },
+      );
     }
   }
 
   @override
   void dispose() {
+    _cityCancellationPoll?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _followResume.dispose();
     _cameraAnimation.dispose();
     _tracking.positionListenable.removeListener(_handleDriverPosition);
     appVoiceGuidanceSettings.removeListener(_handleVoiceSettingChanged);
@@ -199,7 +418,23 @@ class _DriverMapScreenState extends State<DriverMapScreen>
     _nextOrderTransition.invalidate();
     unawaited(_tracking.dispose(widget.orderId));
     unawaited(_voiceController.dispose());
+    unawaited(_wakelockController.dispose());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !_hasActiveNavigation) {
+      return;
+    }
+    _followResume.cancel();
+    _activeMapPointers = 0;
+    if (!_followDriver) setState(_cameraController.resumeFollow);
+    final position = _tracking.latestPosition;
+    if (kDebugMode) {
+      debugPrint('[NavCamera] FOLLOW=true source=app_resume');
+    }
+    if (position != null) _moveMapToDriver(position, snapToRoute: true);
   }
 
   @override
@@ -210,6 +445,7 @@ class _DriverMapScreenState extends State<DriverMapScreen>
       unawaited(_restartTracking(oldWidget.orderId));
     }
     _nextOrderController.updateOrder(widget.orderData);
+    _wakelockController.updateStatus(widget.orderData['status']);
     if (driverRouteContextChanged(
       oldOrderId: oldWidget.orderId,
       newOrderId: widget.orderId,
@@ -220,7 +456,7 @@ class _DriverMapScreenState extends State<DriverMapScreen>
       setState(() {
         _routeState.invalidate();
         _rerouteController.reset();
-        _cameraController.reset();
+        _cameraController.restoreAfterNavigationChange();
         _routeTrimmer.reset();
       });
       if (position == null ||
@@ -237,9 +473,11 @@ class _DriverMapScreenState extends State<DriverMapScreen>
     await _startTracking();
   }
 
+  // Route geometry improves the bearing, but must not gate navigation follow:
+  // while it is loading (or temporarily unavailable) GPS/heading is the
+  // supported fallback and the vehicle must remain screen-fixed.
   bool get _hasActiveNavigation =>
-      driverStatusSupportsNavigation(widget.orderData['status']) &&
-      _routeState.geometry.isNotEmpty;
+      driverStatusSupportsNavigation(widget.orderData['status']);
 
   void _handleDriverPosition() {
     final driverPosition = _tracking.latestPosition;
@@ -269,14 +507,17 @@ class _DriverMapScreenState extends State<DriverMapScreen>
     );
   }
 
+  DriverRoutePlan _routePlan([String? statusOverride]) =>
+      driverRoutePlan(widget.orderData, statusOverride: statusOverride);
+
   void _requestRouteFrom(
     LatLng driverPosition, {
     String? statusOverride,
     bool isReroute = false,
   }) {
     if (isReroute && _routeState.isLoading) return;
-    _cameraController.reset();
-    final destination = _routeDestination(statusOverride);
+    _cameraController.restoreAfterNavigationChange();
+    final plan = _routePlan(statusOverride);
     final orderId = widget.orderId;
     late final int generation;
     setState(() {
@@ -291,7 +532,7 @@ class _DriverMapScreenState extends State<DriverMapScreen>
       _loadRoute(
         driverPosition,
         generation: generation,
-        destination: destination,
+        plan: plan,
         orderId: orderId,
         isReroute: isReroute,
       ),
@@ -331,17 +572,52 @@ class _DriverMapScreenState extends State<DriverMapScreen>
   Future<void> _loadRoute(
     LatLng driverPosition, {
     required int generation,
-    required LatLng destination,
+    required DriverRoutePlan plan,
     required String orderId,
     required bool isReroute,
   }) async {
     try {
+      if (kDebugMode) {
+        final coordinates = [driverPosition, ...plan.orderedRemainingPoints];
+        debugPrint(
+          '[Route] orderId=$orderId '
+          'pickup=${driverPosition.latitude},${driverPosition.longitude} '
+          'stops=${plan.intermediatePoints.map((p) => '${p.latitude},${p.longitude}').toList()} '
+          'destination=${plan.destination.latitude},${plan.destination.longitude} '
+          'osrmCoordinates=${coordinates.map((p) => '${p.longitude},${p.latitude}').join(';')}',
+        );
+      }
       final result = await RouteService.fetchRoute(
         startLat: driverPosition.latitude,
         startLng: driverPosition.longitude,
-        destLat: destination.latitude,
-        destLng: destination.longitude,
+        destLat: plan.destination.latitude,
+        destLng: plan.destination.longitude,
+        intermediatePoints: plan.intermediatePoints,
       );
+
+      if (kDebugMode && result.geometry.isNotEmpty) {
+        final diagnostics = RouteEndpointDiagnostics.fromRoute(
+          geometry: result.geometry,
+          expectedStart: driverPosition,
+          expectedDestination: plan.destination,
+        );
+        debugPrint(
+          '[Route] waypoint[0] input=${driverPosition.latitude},${driverPosition.longitude} '
+          'snapped=${result.geometry.first.latitude},${result.geometry.first.longitude} '
+          'snapDistance=${diagnostics.startDistanceMeters.round()}m',
+        );
+        debugPrint(
+          '[Route] waypoint[last] input=${plan.destination.latitude},${plan.destination.longitude} '
+          'snapped=${result.geometry.last.latitude},${result.geometry.last.longitude} '
+          'snapDistance=${diagnostics.destinationDistanceMeters.round()}m '
+          'withinTolerance=${diagnostics.destinationWithinTolerance}',
+        );
+        assert(
+          diagnostics.destinationWithinTolerance,
+          'OSRM route endpoint is ${diagnostics.destinationDistanceMeters.round()}m '
+          'from the selected destination.',
+        );
+      }
 
       if (mounted && orderId == widget.orderId) {
         setState(() {
@@ -372,15 +648,26 @@ class _DriverMapScreenState extends State<DriverMapScreen>
     }
   }
 
-  void _moveMapToDriver(LatLng position) {
+  void _moveMapToDriver(LatLng position, {bool snapToRoute = false}) {
     final cameraUpdate = _cameraController.update(
       position: position,
       accuracyMeters: _tracking.latestAccuracyMeters,
       reportedHeadingDegrees: _tracking.latestHeadingDegrees,
       speedMetersPerSecond: _tracking.latestSpeedMetersPerSecond,
       routeAhead: _routeTrimmer.visibleRoute,
+      snapToRoute: snapToRoute,
     );
     if (!cameraUpdate.accepted) return;
+    if (kDebugMode) {
+      debugPrint(
+        '[NavCamera] FOLLOW=$_followDriver '
+        'GPS=${position.latitude.toStringAsFixed(6)},'
+        '${position.longitude.toStringAsFixed(6)} '
+        'ROUTE_BEARING=${cameraUpdate.routeBearingDegrees?.toStringAsFixed(1)} '
+        'CAMERA_TARGET=${cameraUpdate.targetHeadingDegrees?.toStringAsFixed(1)} '
+        'CAR_SCREEN_ANCHOR=$navigationVehicleVerticalFraction',
+      );
+    }
     final ticket = _cameraController.beginCameraUpdate();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted ||
@@ -415,7 +702,7 @@ class _DriverMapScreenState extends State<DriverMapScreen>
         _mapController.move(
           _cameraPosition!,
           _navigationZoom,
-          offset: Offset(0, _mapController.camera.nonRotatedSize.height / 7),
+          offset: navigationCameraOffset(_mapController.camera.nonRotatedSize),
           id: 'driver-follow-position',
         );
       }
@@ -427,6 +714,16 @@ class _DriverMapScreenState extends State<DriverMapScreen>
           .then(
             (_) {
               _cameraAnimation.removeListener(tick);
+              if (kDebugMode && _cameraController.canApply(ticket)) {
+                final applied = -_mapController.camera.rotation;
+                final center = _mapController.camera.center;
+                debugPrint(
+                  '[NavCamera] appliedBearing=${applied.toStringAsFixed(1)} '
+                  'mapCenter=${center.latitude.toStringAsFixed(6)},'
+                  '${center.longitude.toStringAsFixed(6)} '
+                  'follow=$_followDriver fixedVehicleMarker=true',
+                );
+              }
             },
             onError: (Object _) {
               _cameraAnimation.removeListener(tick);
@@ -436,13 +733,75 @@ class _DriverMapScreenState extends State<DriverMapScreen>
   }
 
   void _resumeFollowing() {
+    _followResume.cancel();
     final position = _tracking.latestPosition;
     if (position == null) return;
     setState(_cameraController.resumeFollow);
-    if (_hasActiveNavigation) _moveMapToDriver(position);
+    if (kDebugMode) {
+      debugPrint('[NavCamera] follow=true source=gps_button');
+    }
+    if (_hasActiveNavigation) _moveMapToDriver(position, snapToRoute: true);
+  }
+
+  void _suspendFollowingForGesture() {
+    if (!mounted || !_hasActiveNavigation) return;
+    _followResume.cancel();
+    if (!_followDriver) {
+      _scheduleFollowResume();
+      return;
+    }
+    _cameraAnimation.stop();
+    _mapCameraBridge.cancelPending();
+    setState(_cameraController.suspendFollow);
+    if (kDebugMode) {
+      debugPrint('[NavCamera] follow=false source=manual_gesture');
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_mapCameraBridge.applyFlutterMapCamera(_mapController.camera));
+    });
+    _scheduleFollowResume();
+  }
+
+  void _scheduleFollowResume() {
+    _followResume.cancel();
+    if (_activeMapPointers > 0 || !mounted || !_hasActiveNavigation) return;
+    _followResume.schedule();
+  }
+
+  void _mapPointerDown(PointerDownEvent _) {
+    _activeMapPointers++;
+    _followResume.cancel();
+    _suspendFollowingForGesture();
+  }
+
+  void _mapPointerUp(PointerEvent _) {
+    if (_activeMapPointers > 0) _activeMapPointers--;
+    _scheduleFollowResume();
   }
 
   Future<void> _advanceOrder(String currentStatus) async {
+    if (currentStatus == 'in_progress' &&
+        hasPendingIntermediateStop(widget.orderData)) {
+      try {
+        final stops = await OrderWorkflowService().advanceOrderStop(
+          widget.orderId,
+        );
+        if (!mounted) return;
+        setState(() => widget.orderData['stops'] = stops);
+        final position = _tracking.latestPosition;
+        if (position != null) _requestRouteFrom(position);
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(AppLocalizations.of(context).driverMapActionFailed),
+            ),
+          );
+        }
+      }
+      return;
+    }
     final nextStatus = {
       'accepted': 'driver_arrived',
       'driver_arrived': 'in_progress',
@@ -465,13 +824,16 @@ class _DriverMapScreenState extends State<DriverMapScreen>
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(AppLocalizations.of(context).driverMapActionFailed),
+          ),
+        );
       }
       return;
     }
     if (nextStatus == 'completed') {
+      _wakelockController.updateStatus(nextStatus);
       await _tracking.stopLocationUpdates(widget.orderId);
     } else if (nextStatus == 'in_progress') {
       final position = _tracking.latestPosition;
@@ -492,12 +854,60 @@ class _DriverMapScreenState extends State<DriverMapScreen>
               OrderServiceType.fromValue(
                 widget.orderData['serviceType'],
               ).isDelivery
-              ? 'заказчика'
+              ? AppLocalizations.of(context).driverMapCustomer
               : null,
         ),
       );
       if (!mounted || completeResult == null) return;
       await _switchToActivatedNextOrder(completeResult);
+    }
+  }
+
+  Future<void> _cancelCityOrder(String status) async {
+    if (_cancellingCityOrder) return;
+    final reason = status == 'in_progress'
+        ? await showCityCancellationDialog(context, isDriver: true)
+        : null;
+    if (status == 'in_progress' && reason == null) return;
+    if (!mounted) return;
+    if (status != 'in_progress') {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(AppLocalizations.of(dialogContext).cancelOrderTitle),
+          content: Text(AppLocalizations.of(dialogContext).confirmCancelOrder),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: Text(AppLocalizations.of(dialogContext).no),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(AppLocalizations.of(dialogContext).yesCancel),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    setState(() => _cancellingCityOrder = true);
+    try {
+      await OrderWorkflowService().cancelOrder(
+        widget.orderId,
+        reasonCode: reason?.code,
+        reasonText: reason?.text,
+      );
+      await _finishCancelledCityOrder();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(AppLocalizations.of(context).cancelOrderFailed),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _cancellingCityOrder = false);
     }
   }
 
@@ -537,8 +947,8 @@ class _DriverMapScreenState extends State<DriverMapScreen>
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Следующий заказ принят. Не удалось загрузить данные.'),
+        SnackBar(
+          content: Text(AppLocalizations.of(context).driverMapNextLoadFailed),
         ),
       );
     }
@@ -548,8 +958,8 @@ class _DriverMapScreenState extends State<DriverMapScreen>
     final accepted = await _nextOrderController.accept();
     if (!mounted) return;
     final message = accepted
-        ? 'Следующий заказ принят'
-        : (_nextOrderController.lastError ?? 'Заказ уже недоступен');
+        ? AppLocalizations.of(context).driverMapNextAccepted
+        : AppLocalizations.of(context).driverMapNextUnavailable;
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
@@ -564,23 +974,25 @@ class _DriverMapScreenState extends State<DriverMapScreen>
     final price = await showDialog<int>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Своя цена'),
+        title: Text(AppLocalizations.of(dialogContext).driverMapOwnPrice),
         content: TextField(
           controller: controller,
           keyboardType: TextInputType.number,
-          decoration: const InputDecoration(labelText: 'Цена, ₸'),
+          decoration: InputDecoration(
+            labelText: AppLocalizations.of(dialogContext).driverMapPriceLabel,
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Отмена'),
+            child: Text(AppLocalizations.of(dialogContext).cancel),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(
               dialogContext,
               int.tryParse(controller.text.trim()),
             ),
-            child: const Text('Отправить'),
+            child: Text(AppLocalizations.of(dialogContext).driverSendOffer),
           ),
         ],
       ),
@@ -596,14 +1008,18 @@ class _DriverMapScreenState extends State<DriverMapScreen>
       _nextOrderController.markOfferSent(candidate.orderId);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Предложение отправлено пассажиру')),
+          SnackBar(
+            content: Text(AppLocalizations.of(context).driverMapOfferSent),
+          ),
         );
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(AppLocalizations.of(context).driverOfferFailed),
+          ),
+        );
       }
     }
   }
@@ -615,11 +1031,17 @@ class _DriverMapScreenState extends State<DriverMapScreen>
       widget.orderData['serviceType'],
     );
     final actionLabel = switch (status) {
-      'accepted' => 'Я на месте',
+      'accepted' => AppLocalizations.of(context).driverMapArrivedAction,
       'driver_arrived' || 'arrived' =>
-        serviceType.isDelivery ? 'Посылка получена' : 'Начать поездку',
+        serviceType.isDelivery
+            ? AppLocalizations.of(context).driverMapPackageReceived
+            : AppLocalizations.of(context).driverMapStartTrip,
       'in_progress' =>
-        serviceType.isDelivery ? 'Завершить доставку' : 'Завершить поездку',
+        hasPendingIntermediateStop(widget.orderData)
+            ? AppLocalizations.of(context).driverMapNextStop
+            : serviceType.isDelivery
+            ? AppLocalizations.of(context).driverMapCompleteDelivery
+            : AppLocalizations.of(context).driverMapCompleteTrip,
       _ => null,
     };
     LatLng passengerFrom = LatLng(
@@ -630,113 +1052,118 @@ class _DriverMapScreenState extends State<DriverMapScreen>
       widget.orderData['toLat'],
       widget.orderData['toLng'],
     );
+    final routeStops = orderStopsFromData(widget.orderData);
 
     return Scaffold(
       appBar: AppBar(
         title: Text(switch (serviceType) {
-          OrderServiceType.delivery => 'Выполнение доставки',
-          OrderServiceType.intercity => 'Междугородняя поездка',
-          OrderServiceType.city => 'Выполнение заказа',
+          OrderServiceType.delivery => AppLocalizations.of(
+            context,
+          ).driverMapDeliveryTitle,
+          OrderServiceType.intercity => AppLocalizations.of(
+            context,
+          ).driverMapIntercityTitle,
+          OrderServiceType.city => AppLocalizations.of(
+            context,
+          ).driverMapCityTitle,
         }),
         backgroundColor: Colors.green,
       ),
       drawer: AppDrawer(mode: AppMode.driver, selectedServiceType: serviceType),
       body: Stack(
         children: [
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: passengerFrom,
-              initialZoom: _navigationZoom,
-              cameraConstraint: CameraConstraint.contain(
-                bounds: LatLngBounds(
-                  const LatLng(-90, -180),
-                  const LatLng(90, 180),
+          Listener(
+            onPointerDown: _mapPointerDown,
+            onPointerUp: _mapPointerUp,
+            onPointerCancel: _mapPointerUp,
+            child: FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: passengerFrom,
+                initialZoom: _navigationZoom,
+                cameraConstraint: CameraConstraint.contain(
+                  bounds: LatLngBounds(
+                    const LatLng(-90, -180),
+                    const LatLng(90, 180),
+                  ),
                 ),
+                onMapReady: () {
+                  _isMapReady = true;
+                  final position = _tracking.latestPosition;
+                  if (position != null &&
+                      _followDriver &&
+                      _hasActiveNavigation) {
+                    _moveMapToDriver(position);
+                  }
+                },
+                onMapEvent: (event) {
+                  if (navigationMapEventDisablesFollow(event.source) &&
+                      mounted) {
+                    _suspendFollowingForGesture();
+                  }
+                },
               ),
-              onMapReady: () {
-                _isMapReady = true;
-                final position = _tracking.latestPosition;
-                if (position != null && _followDriver && _hasActiveNavigation) {
-                  _moveMapToDriver(position);
-                }
-              },
-              onPositionChanged: (_, hasGesture) {
-                if (hasGesture && _followDriver && mounted) {
-                  _cameraAnimation.stop();
-                  setState(_cameraController.suspendFollow);
-                }
-              },
-              // FlutterMap.rotateRaw emits an event but does not call
-              // onPositionChanged, so handle a rotation-only gesture too.
-              onMapEvent: (event) {
-                if (event is MapEventRotate &&
-                    event.source != MapEventSource.mapController &&
-                    _followDriver &&
-                    mounted) {
-                  _cameraAnimation.stop();
-                  setState(_cameraController.suspendFollow);
-                }
-              },
-            ),
-            children: [
-              const TulparMapTileLayer(),
-              if (_routeTrimmer.visibleRoute.isNotEmpty)
-                PolylineLayer(
-                  polylines: [
-                    TulparMapVisuals.routePolyline(_routeTrimmer.visibleRoute),
-                  ],
-                ),
-              MarkerLayer(
-                markers: [
-                  TulparMapVisuals.endpointMarker(
-                    point: passengerFrom,
-                    endpoint: TulparMapEndpoint.pickup,
-                  ),
-                  TulparMapVisuals.endpointMarker(
-                    point: passengerTo,
-                    endpoint: TulparMapEndpoint.destination,
-                  ),
-                ],
-              ),
-              if (!_followDriver || !_hasActiveNavigation)
-                DriverLocationMarkerLayer(
-                  positionListenable: _tracking.positionListenable,
-                  accuracyProvider: () => _tracking.latestAccuracyMeters,
-                  headingProvider: () => _tracking.latestHeadingDegrees,
-                  maximumAnimationDuration: const Duration(milliseconds: 800),
-                  width: TulparMapVisuals.vehicleMarkerSize,
-                  height: TulparMapVisuals.vehicleMarkerSize,
-                  marker: TulparVehicleMarker(
-                    isDelivery: serviceType.isDelivery,
-                  ),
-                ),
-            ],
-          ),
-          if (_followDriver && _hasActiveNavigation)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: LayoutBuilder(
-                  builder: (context, constraints) => Stack(
-                    children: [
-                      Positioned(
-                        left:
-                            (constraints.maxWidth -
-                                TulparMapVisuals.vehicleMarkerSize) /
-                            2,
-                        top:
-                            constraints.maxHeight * (0.5 + 1 / 7) -
-                            TulparMapVisuals.vehicleMarkerSize / 2,
-                        width: TulparMapVisuals.vehicleMarkerSize,
-                        height: TulparMapVisuals.vehicleMarkerSize,
-                        child: TulparVehicleMarker(
-                          isDelivery: serviceType.isDelivery,
-                        ),
+              children: [
+                TulparMapTileLayer(cameraBridge: _mapCameraBridge),
+                if (_routeTrimmer.visibleRoute.isNotEmpty)
+                  PolylineLayer(
+                    polylines: [
+                      TulparMapVisuals.routePolyline(
+                        _routeTrimmer.visibleRoute,
                       ),
                     ],
                   ),
+                MarkerLayer(
+                  markers: [
+                    TulparMapVisuals.endpointMarker(
+                      point: passengerFrom,
+                      endpoint: TulparMapEndpoint.pickup,
+                    ),
+                    TulparMapVisuals.endpointMarker(
+                      point: passengerTo,
+                      endpoint: TulparMapEndpoint.destination,
+                    ),
+                    for (final stop in routeStops.where(
+                      (stop) => !stop.isFinal,
+                    ))
+                      if (stop.raw['latitude'] is num &&
+                          stop.raw['longitude'] is num)
+                        TulparMapVisuals.stopMarker(
+                          point: LatLng(
+                            (stop.raw['latitude'] as num).toDouble(),
+                            (stop.raw['longitude'] as num).toDouble(),
+                          ),
+                          number: stop.sequence + 1,
+                          reached: stop.isReached,
+                        ),
+                  ],
                 ),
-              ),
+                if (!navigationUsesFixedVehicleMarker(
+                  following: _followDriver,
+                  hasActiveNavigation: _hasActiveNavigation,
+                ))
+                  DriverLocationMarkerLayer(
+                    key: const Key('driver_geographic_vehicle_marker'),
+                    positionListenable: _tracking.positionListenable,
+                    accuracyProvider: () => _tracking.latestAccuracyMeters,
+                    headingProvider: () => _tracking.latestHeadingDegrees,
+                    maximumAnimationDuration: const Duration(milliseconds: 800),
+                    width: TulparMapVisuals.vehicleMarkerSize,
+                    height: TulparMapVisuals.vehicleMarkerSize,
+                    marker: TulparVehicleMarker(
+                      isDelivery: serviceType.isDelivery,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          if (navigationUsesFixedVehicleMarker(
+            following: _followDriver,
+            hasActiveNavigation: _hasActiveNavigation,
+          ))
+            FixedNavigationVehicleMarker(
+              gpsPosition: _tracking.latestPosition,
+              marker: TulparVehicleMarker(isDelivery: serviceType.isDelivery),
             ),
           if (_routeState.steps.isNotEmpty)
             NavigationOverlay(
@@ -747,7 +1174,9 @@ class _DriverMapScreenState extends State<DriverMapScreen>
               positionListenable: _tracking.positionListenable,
               positionAccuracyProvider: () => _tracking.latestAccuracyMeters,
               isRerouting: _routeState.isRerouting,
-              rerouteErrorMessage: _routeState.rerouteErrorMessage,
+              rerouteErrorMessage: _routeState.rerouteErrorMessage == null
+                  ? null
+                  : AppLocalizations.of(context).driverMapRerouteFailed,
               voiceController: _voiceController,
               voiceEnabled: appVoiceGuidanceSettings.enabled,
               voiceActive: _hasActiveNavigation,
@@ -796,7 +1225,7 @@ class _DriverMapScreenState extends State<DriverMapScreen>
                         children: [
                           Expanded(
                             child: Text(
-                              '${widget.orderData['toAddress'] ?? ''} · ${serviceType.title}',
+                              '${AddressLabelService.fromOrder(widget.orderData, Localizations.localeOf(context), const ['toAddress', 'destinationAddress'])} · ${serviceType.title}',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
@@ -813,6 +1242,8 @@ class _DriverMapScreenState extends State<DriverMapScreen>
                       ),
                     ),
                     if (_isOrderPanelExpanded) ...[
+                      OrderStopsView(orderData: widget.orderData),
+                      const SizedBox(height: 10),
                       if (_trackingMessage != null)
                         Text(
                           _trackingMessage!,
@@ -820,8 +1251,24 @@ class _DriverMapScreenState extends State<DriverMapScreen>
                         ),
                       Text(
                         serviceType.isDelivery
-                            ? 'Заберите посылку: ${widget.orderData['fromAddress']}'
-                            : 'Клиент ожидает: ${widget.orderData['fromAddress']}',
+                            ? AppLocalizations.of(
+                                context,
+                              ).driverMapCollectPackage(
+                                AddressLabelService.fromOrder(
+                                  widget.orderData,
+                                  Localizations.localeOf(context),
+                                  const ['fromAddress', 'pickupAddress'],
+                                ),
+                              )
+                            : AppLocalizations.of(
+                                context,
+                              ).driverMapClientWaiting(
+                                AddressLabelService.fromOrder(
+                                  widget.orderData,
+                                  Localizations.localeOf(context),
+                                  const ['fromAddress', 'pickupAddress'],
+                                ),
+                              ),
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                       if (DeliveryDetailsView.isDelivery(widget.orderData)) ...[
@@ -843,14 +1290,17 @@ class _DriverMapScreenState extends State<DriverMapScreen>
                       children: [
                         Expanded(
                           child: ElevatedButton.icon(
-                            icon: const Icon(Icons.chat),
-                            label: const Text('Чат'),
+                            icon: ChatUnreadBadge(orderId: widget.orderId),
+                            label: Text(AppLocalizations.of(context).chat),
                             onPressed: () => Navigator.push(
                               context,
                               MaterialPageRoute(
                                 builder: (_) => ChatScreen(
                                   orderId: widget.orderId,
-                                  peerName: 'Пассажир',
+                                  peerUserId: widget.orderData['passengerId']?.toString(),
+                                  peerName: AppLocalizations.of(
+                                    context,
+                                  ).passenger,
                                 ),
                               ),
                             ),
@@ -872,6 +1322,21 @@ class _DriverMapScreenState extends State<DriverMapScreen>
                           ),
                       ],
                     ),
+                    if (serviceType == OrderServiceType.city &&
+                        const {
+                          'accepted',
+                          'driver_arriving',
+                          'driver_arrived',
+                          'arrived',
+                          'in_progress',
+                        }.contains(status))
+                      TextButton.icon(
+                        onPressed: _cancellingCityOrder
+                            ? null
+                            : () => _cancelCityOrder(status),
+                        icon: const Icon(Icons.cancel_outlined),
+                        label: Text(AppLocalizations.of(context).cancelOrder),
+                      ),
                   ],
                 ),
               ),

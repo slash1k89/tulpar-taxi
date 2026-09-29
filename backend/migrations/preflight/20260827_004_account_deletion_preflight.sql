@@ -101,7 +101,7 @@ FROM (VALUES
   ('orders_active_driver_check'), ('orders_driver_arrived_timestamp_check'),
   ('orders_in_progress_timestamp_check'), ('orders_completed_timestamp_check'),
   ('orders_completed_price_check'), ('orders_cancelled_timestamp_check'),
-  ('intercity_rides_status_check'), ('intercity_rides_seats'),
+  ('intercity_rides_status'), ('intercity_rides_seats'),
   ('intercity_ride_bookings_idempotency'),
   ('intercity_ride_requests_cities_different'),
   ('intercity_ride_request_notifications_unique'),

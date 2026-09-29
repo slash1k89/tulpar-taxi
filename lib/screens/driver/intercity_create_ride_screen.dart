@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 import '../../app_routes.dart';
 import '../../models/intercity_driver_ride_draft.dart';
@@ -11,7 +13,6 @@ import '../../services/geocoding_service.dart';
 import '../../services/intercity_ride_service.dart';
 import '../../services/order_creation_service.dart';
 import '../../services/tulpar_api_client.dart';
-import '../../utils/intercity_ride_formatters.dart';
 import '../../widgets/intercity_ride_fields.dart';
 import '../../widgets/tulpar_time_picker.dart';
 import '../../widgets/tulpar_date_picker.dart';
@@ -148,7 +149,9 @@ class _IntercityCreateRideScreenState extends State<IntercityCreateRideScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            widget.editing ? 'Поездка обновлена' : 'Поездка опубликована',
+            widget.editing
+                ? AppLocalizations.of(context).driverRideUpdated
+                : AppLocalizations.of(context).driverRidePublished,
           ),
         ),
       );
@@ -160,7 +163,14 @@ class _IntercityCreateRideScreenState extends State<IntercityCreateRideScreen> {
         Navigator.pushReplacementNamed(context, AppRoutes.driverIntercityRides);
       }
     } catch (error) {
-      if (mounted) setState(() => _error = intercityDriverErrorMessage(error));
+      if (mounted) {
+        setState(
+          () => _error = intercityDriverErrorMessage(
+            error,
+            AppLocalizations.of(context),
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -179,20 +189,20 @@ class _IntercityCreateRideScreenState extends State<IntercityCreateRideScreen> {
     );
     String? message;
     if (origin == null || destination == null) {
-      message = 'Выберите города отправления и назначения.';
+      message = AppLocalizations.of(context).driverRideChooseCities;
     } else if (_cityKey(origin.name) == _cityKey(destination.name)) {
-      message = 'Города отправления и назначения должны отличаться.';
+      message = AppLocalizations.of(context).driverRideDifferentCities;
     } else if (!departureAt.isAfter(DateTime.now().toUtc())) {
-      message = 'Выберите будущую дату и время.';
+      message = AppLocalizations.of(context).driverRideFutureTime;
     } else if (_seats < 1 || _seats > intercityRideMaximumSeats) {
-      message = 'Можно предложить от 1 до 7 мест.';
+      message = AppLocalizations.of(context).driverRideSeatsRange;
     } else if (price == null ||
         price < 1 ||
         price > intercityRideMaximumPricePerSeat) {
-      message = 'Укажите корректную цену за место.';
+      message = AppLocalizations.of(context).driverRideInvalidPrice;
     } else if (_commentController.text.trim().length >
         intercityRideMaximumCommentLength) {
-      message = 'Комментарий слишком длинный.';
+      message = AppLocalizations.of(context).driverRideCommentLong;
     }
     if (message != null) {
       setState(() => _error = message);
@@ -219,7 +229,9 @@ class _IntercityCreateRideScreenState extends State<IntercityCreateRideScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          widget.editing ? 'Редактировать поездку' : 'Создать поездку',
+          widget.editing
+              ? AppLocalizations.of(context).driverRideEditTitle
+              : AppLocalizations.of(context).driverRideCreateTitle,
         ),
       ),
       body: SafeArea(
@@ -227,26 +239,23 @@ class _IntercityCreateRideScreenState extends State<IntercityCreateRideScreen> {
           padding: const EdgeInsets.all(16),
           children: [
             if (protected) ...[
-              const Card(
+              Card(
                 key: Key('driver_ride_protected_notice'),
                 child: Padding(
-                  padding: EdgeInsets.all(12),
-                  child: Text(
-                    'Маршрут, время и количество мест нельзя '
-                    'изменить после бронирования.',
-                  ),
+                  padding: const EdgeInsets.all(12),
+                  child: Text(AppLocalizations.of(context).driverRideProtected),
                 ),
               ),
               const SizedBox(height: 12),
             ],
             if (protected)
               _ProtectedValue(
-                label: 'Маршрут',
+                label: AppLocalizations.of(context).driverRideRoute,
                 value: '${_origin?.name ?? '—'} → ${_destination?.name ?? '—'}',
               )
             else ...[
               IntercityCitySelectionField(
-                label: 'Откуда',
+                label: AppLocalizations.of(context).intercityFrom,
                 value: _origin,
                 onChanged: (value) => setState(() {
                   _origin = value;
@@ -255,7 +264,7 @@ class _IntercityCreateRideScreenState extends State<IntercityCreateRideScreen> {
               ),
               const SizedBox(height: 12),
               IntercityCitySelectionField(
-                label: 'Куда',
+                label: AppLocalizations.of(context).intercityTo,
                 value: _destination,
                 onChanged: (value) => setState(() {
                   _destination = value;
@@ -271,8 +280,14 @@ class _IntercityCreateRideScreenState extends State<IntercityCreateRideScreen> {
                     key: const Key('driver_ride_date'),
                     onTap: protected ? null : _selectDate,
                     child: InputDecorator(
-                      decoration: const InputDecoration(labelText: 'Дата'),
-                      child: Text(formatIntercityCalendarDate(_date)),
+                      decoration: InputDecoration(
+                        labelText: AppLocalizations.of(context).driverRideDate,
+                      ),
+                      child: Text(
+                        DateFormat.yMd(
+                          Localizations.localeOf(context).toLanguageTag(),
+                        ).format(_date),
+                      ),
                     ),
                   ),
                 ),
@@ -282,7 +297,9 @@ class _IntercityCreateRideScreenState extends State<IntercityCreateRideScreen> {
                     key: const Key('driver_ride_time'),
                     onTap: protected ? null : _selectTime,
                     child: InputDecorator(
-                      decoration: const InputDecoration(labelText: 'Время'),
+                      decoration: InputDecoration(
+                        labelText: AppLocalizations.of(context).driverRideTime,
+                      ),
                       child: Text(formatHourMinute24(_time.hour, _time.minute)),
                     ),
                   ),
@@ -291,7 +308,10 @@ class _IntercityCreateRideScreenState extends State<IntercityCreateRideScreen> {
             ),
             const SizedBox(height: 16),
             if (protected)
-              _ProtectedValue(label: 'Количество мест', value: '$_seats')
+              _ProtectedValue(
+                label: AppLocalizations.of(context).intercitySeatCount,
+                value: '$_seats',
+              )
             else
               IntercitySeatsSelector(
                 value: _seats,
@@ -304,22 +324,22 @@ class _IntercityCreateRideScreenState extends State<IntercityCreateRideScreen> {
               controller: _priceController,
               keyboardType: TextInputType.number,
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: const InputDecoration(
-                labelText: 'Цена за место',
+              decoration: InputDecoration(
+                labelText: AppLocalizations.of(context).driverRidePricePerSeat,
                 suffixText: '₸',
               ),
             ),
             if (protected)
-              const Padding(
-                padding: EdgeInsets.only(top: 6),
-                child: Text(
-                  'Новая цена не изменит сумму уже созданных бронирований.',
-                ),
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(AppLocalizations.of(context).driverRidePriceNotice),
               ),
             SwitchListTile(
               key: const Key('driver_ride_luggage'),
               contentPadding: EdgeInsets.zero,
-              title: const Text('Багаж разрешён'),
+              title: Text(
+                AppLocalizations.of(context).driverRideLuggageAllowed,
+              ),
               value: _allowsLuggage,
               onChanged: (value) => setState(() => _allowsLuggage = value),
             ),
@@ -328,7 +348,9 @@ class _IntercityCreateRideScreenState extends State<IntercityCreateRideScreen> {
               controller: _commentController,
               maxLength: intercityRideMaximumCommentLength,
               maxLines: 3,
-              decoration: const InputDecoration(labelText: 'Комментарий'),
+              decoration: InputDecoration(
+                labelText: AppLocalizations.of(context).driverRideComment,
+              ),
             ),
             if (_error != null)
               Text(
@@ -348,7 +370,9 @@ class _IntercityCreateRideScreenState extends State<IntercityCreateRideScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : Text(
-                        widget.editing ? 'Сохранить' : 'Опубликовать поездку',
+                        widget.editing
+                            ? AppLocalizations.of(context).profileSave
+                            : AppLocalizations.of(context).driverRidePublish,
                       ),
               ),
             ),
@@ -406,19 +430,19 @@ String _cityKey(String value) => value
     .toLowerCase()
     .replaceAll('ё', 'е');
 
-String intercityDriverErrorMessage(Object error) {
+String intercityDriverErrorMessage(Object error, AppLocalizations l10n) {
   if (error is TulparApiException) {
     return switch (error.statusCode) {
-      400 => 'Проверьте данные поездки.',
-      401 => 'Войдите в аккаунт и повторите.',
-      403 => 'Доступ водителя не активен.',
-      404 => 'Поездка не найдена.',
-      409 => 'Поездка уже изменилась. Обновите данные.',
-      _ => 'Не удалось сохранить поездку.',
+      400 => l10n.driverRideInvalidData,
+      401 => l10n.driverRideLogin,
+      403 => l10n.driverRideAccess,
+      404 => l10n.driverRideMissing,
+      409 => l10n.driverRideChanged,
+      _ => l10n.driverRideSaveFailed,
     };
   }
   if (error is TimeoutException) {
-    return 'Сервер не ответил. Повторите позже.';
+    return l10n.driverRideServerTimeout;
   }
-  return 'Не удалось сохранить поездку.';
+  return l10n.driverRideSaveFailed;
 }

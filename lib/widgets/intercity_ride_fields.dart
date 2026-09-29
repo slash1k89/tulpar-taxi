@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../screens/map/intercity_place_picker_screens.dart';
 import '../services/geocoding_service.dart';
+import '../l10n/generated/app_localizations.dart';
 
 class IntercityCitySelectionField extends StatelessWidget {
   const IntercityCitySelectionField({
@@ -38,7 +39,9 @@ class IntercityCitySelectionField extends StatelessWidget {
         prefixIcon: const Icon(Icons.location_city_outlined),
         suffixIcon: const Icon(Icons.arrow_drop_down),
       ),
-      child: Text(value?.displayName ?? 'Выберите город'),
+      child: Text(
+        value?.displayName ?? AppLocalizations.of(context).mapChooseCity,
+      ),
     ),
   );
 }
@@ -58,20 +61,20 @@ class IntercitySeatsSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Row(
     children: [
-      const Expanded(
+      Expanded(
         child: Text(
-          'Количество мест',
-          style: TextStyle(fontWeight: FontWeight.w600),
+          AppLocalizations.of(context).intercitySeatCount,
+          style: const TextStyle(fontWeight: FontWeight.w600),
         ),
       ),
       IconButton(
         key: const Key('intercity_seats_decrease'),
-        tooltip: 'Уменьшить',
+        tooltip: AppLocalizations.of(context).intercityDecrease,
         onPressed: value > 1 ? () => onChanged(value - 1) : null,
         icon: const Icon(Icons.remove_circle_outline),
       ),
       Semantics(
-        label: 'Количество мест: $value',
+        label: AppLocalizations.of(context).intercitySeatSemantics(value),
         child: Text(
           '$value',
           key: const Key('intercity_seats_value'),
@@ -80,7 +83,7 @@ class IntercitySeatsSelector extends StatelessWidget {
       ),
       IconButton(
         key: const Key('intercity_seats_increase'),
-        tooltip: 'Увеличить',
+        tooltip: AppLocalizations.of(context).intercityIncrease,
         onPressed: value < maximum ? () => onChanged(value + 1) : null,
         icon: const Icon(Icons.add_circle_outline),
       ),

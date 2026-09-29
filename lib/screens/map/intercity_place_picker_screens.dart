@@ -8,6 +8,7 @@ import '/models/city.dart';
 import '/services/geocoding_service.dart';
 import '/services/map_point_address_resolver.dart';
 import 'destination_picker_screen.dart';
+import '/l10n/generated/app_localizations.dart';
 
 class IntercityCityPickerScreen extends StatefulWidget {
   const IntercityCityPickerScreen({super.key, this.search});
@@ -47,7 +48,7 @@ class _IntercityCityPickerScreenState extends State<IntercityCityPickerScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     resizeToAvoidBottomInset: true,
-    appBar: AppBar(title: const Text('Выберите город')),
+    appBar: AppBar(title: Text(AppLocalizations.of(context).mapChooseCity)),
     body: Column(
       children: [
         Padding(
@@ -56,10 +57,10 @@ class _IntercityCityPickerScreenState extends State<IntercityCityPickerScreen> {
             key: const Key('intercity_city_search'),
             autofocus: true,
             onChanged: _search,
-            decoration: const InputDecoration(
-              hintText: 'Город или населённый пункт',
-              prefixIcon: Icon(Icons.search),
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              hintText: AppLocalizations.of(context).intercitySearchCityHint,
+              prefixIcon: const Icon(Icons.search),
+              border: const OutlineInputBorder(),
             ),
           ),
         ),
@@ -143,6 +144,10 @@ class _IntercityAddressPickerScreenState
   void _search(String value) {
     _debounce?.cancel();
     final requestId = ++_searchRequestId;
+    if (value.trim().runes.length < 2) {
+      setState(() => _results = const []);
+      return;
+    }
     _debounce = Timer(const Duration(milliseconds: 300), () async {
       final results =
           await (widget.search?.call(value, widget.settlement) ??
@@ -203,10 +208,8 @@ class _IntercityAddressPickerScreenState
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Не удалось проверить город. Проверьте сеть и повторите.',
-          ),
+        SnackBar(
+          content: Text(AppLocalizations.of(context).pickerCityCheckFailed),
         ),
       );
       return;
@@ -219,7 +222,11 @@ class _IntercityAddressPickerScreenState
         )) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Выберите точку в городе ${widget.settlement.name}.'),
+          content: Text(
+            AppLocalizations.of(
+              context,
+            ).pickerChooseInCity(widget.settlement.name),
+          ),
         ),
       );
       return;
@@ -249,11 +256,11 @@ class _IntercityAddressPickerScreenState
             autofocus: true,
             onChanged: _search,
             decoration: InputDecoration(
-              hintText: 'Улица и дом',
+              hintText: AppLocalizations.of(context).intercityStreetHouseHint,
               prefixIcon: const Icon(Icons.search),
               suffixIcon: IconButton(
                 key: const Key('intercity_address_map_button'),
-                tooltip: 'Выбрать на карте',
+                tooltip: AppLocalizations.of(context).intercityChooseOnMap,
                 onPressed: _openMap,
                 icon: const Icon(Icons.map_outlined),
               ),
@@ -273,13 +280,24 @@ class _IntercityAddressPickerScreenState
                 subtitle: address.locality == null
                     ? null
                     : Text(address.locality!),
-                onTap: () => Navigator.pop(
-                  context,
-                  MapPointSelection(
-                    point: LatLng(address.lat, address.lng),
-                    address: address.shortAddress,
-                  ),
-                ),
+                onTap: () {
+                  if (address.isStreetOnly) {
+                    _searchRequestId++;
+                    _searchController.text = '${address.shortAddress} ';
+                    _searchController.selection = TextSelection.collapsed(
+                      offset: _searchController.text.length,
+                    );
+                    setState(() => _results = const []);
+                    return;
+                  }
+                  Navigator.pop(
+                    context,
+                    MapPointSelection(
+                      point: LatLng(address.lat, address.lng),
+                      address: address.shortAddress,
+                    ),
+                  );
+                },
               );
             },
           ),

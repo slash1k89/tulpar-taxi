@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 import 'package:taxi_esil/widgets/app_drawer.dart';
 
 void main() {
@@ -10,6 +11,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           appBar: AppBar(),
           drawer: AppDrawer(
@@ -34,6 +37,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           appBar: AppBar(),
           drawer: AppDrawer(

@@ -15,6 +15,7 @@ import 'package:taxi_esil/screens/intercity/intercity_request_screen.dart';
 import 'package:taxi_esil/screens/intercity/intercity_ride_details_screen.dart';
 import 'package:taxi_esil/services/geocoding_service.dart';
 import 'package:taxi_esil/services/intercity_ride_service.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 void main() {
   test('pickup DTO fields are nullable and backward compatible', () {
@@ -49,6 +50,9 @@ void main() {
     final repository = _PassengerRepository();
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRideDetailsScreen(
           ride: _ride,
           repository: repository,
@@ -67,6 +71,9 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRideDetailsScreen(
           key: const ValueKey('with-pickup'),
           ride: _ride,
@@ -96,6 +103,9 @@ void main() {
     var pickerCalls = 0;
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRideDetailsScreen(
           ride: _ride,
           repository: repository,
@@ -138,6 +148,9 @@ void main() {
     final repository = _PassengerRepository();
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRequestScreen(
           repository: repository,
           initialDraft: _draft,
@@ -180,6 +193,9 @@ void main() {
     final repository = _PassengerRepository(requests: [request]);
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRequestScreen(
           repository: repository,
           initialDraft: _draft,
@@ -234,7 +250,12 @@ void main() {
       ],
     );
     await tester.pumpWidget(
-      MaterialApp(home: IntercityBookingsScreen(repository: repository)),
+      MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: IntercityBookingsScreen(repository: repository),
+      ),
     );
     await tester.pumpAndSettle();
     expect(find.text('Точка посадки: ${_pickup1.address}'), findsOneWidget);
@@ -243,6 +264,9 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityRequestScreen(
           repository: repository,
           initialDraft: _draft,
@@ -263,7 +287,12 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      MaterialApp(home: IntercityRideDetailsScreen(ride: _ride)),
+      MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: IntercityRideDetailsScreen(ride: _ride),
+      ),
     );
     expect(find.text('Откуда вас забрать?'), findsOneWidget);
 
@@ -277,6 +306,9 @@ void main() {
     final driverRepository = _DriverRepository(booking);
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityDriverRideDetailsScreen(
           rideId: _ride.rideId,
           repository: driverRepository,
@@ -295,7 +327,10 @@ void main() {
     expect(find.text('Комментарий пассажира: У входа'), findsOneWidget);
 
     await tester.pumpWidget(
-      const MaterialApp(
+      MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityPickupViewerScreen(
           pickup: _pickup1,
           showMapTiles: false,
@@ -314,6 +349,9 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: IntercityDriverRideDetailsScreen(
           rideId: _ride.rideId,
           repository: _DriverRepository(

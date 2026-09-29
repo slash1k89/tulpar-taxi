@@ -1,15 +1,34 @@
 import express from 'express';
 import pg from 'pg';
-import { initializeApp, applicationDefault } from 'firebase-admin/app';
+import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getMessaging } from 'firebase-admin/messaging';
 import { createDriverProfileRouter } from './routes/driver-profile.js';
+import { createCitiesRouter } from './routes/cities.js';
 import { createOrdersRouter } from './routes/orders.js';
 import { createRoutingRouter } from './routes/routing.js';
 import { createGeocodingRouter } from './routes/geocoding.js';
 import { createIntercityRidesRouter } from './routes/intercity-rides.js';
+import { createIntercityChatRouter } from './routes/intercity-chat.js';
 import { createAccountRouter } from './routes/account.js';
 import { createAuthRouter } from './routes/auth.js';
+import { PasswordAuthService } from './auth/password-service.js';
+import { cleanupExpiredAuthHistory } from './auth/auth-history-cleanup.js';
+import { createUserLocaleRouter } from './routes/user-locale.js';
+import { createTermsRouter } from './routes/terms.js';
+import { createStoreComplianceRouter } from './routes/store-compliance.js';
+import { createRequireCurrentTerms } from './terms-policy.js';
+import {
+  createChatUnreadRouter,
+  findChatViewer,
+  markChatRead,
+} from './routes/chat-unread.js';
+import { isUuid } from './intercity-ride-policy.js';
+import { localizedPushCopy } from './push-copy.js';
+import { resolveFirebaseCredential } from './firebase-credential.js';
+import { isPermanentlyInvalidPushTokenError } from './push-token-policy.js';
+import { canReceiveLocalOrderNotification } from './city-scope.js';
+import { areUsersBlocked, canBlockedPairWriteChat } from './block-policy.js';
 import { createAccessTokenMiddleware } from './auth/authenticate-access-token.js';
 import {
   createDualAuthIdentity,
@@ -29,6 +48,7 @@ import {
   configureTrustProxy,
   createApiRateLimiter,
   createAuthVerificationRateLimiter,
+  createChatSendRateLimiter,
   createCorsMiddleware,
   createHelmetMiddleware,
   createJsonBodyParser,
@@ -49,6 +69,7 @@ app.use(createJsonBodyParser());
 
 const pushTestRateLimiter = createPushTestRateLimiter();
 const authVerificationRateLimiter = createAuthVerificationRateLimiter();
+const chatSendRateLimiter = createChatSendRateLimiter();
 
 
 const pool = new Pool({
@@ -60,29 +81,40 @@ const pool = new Pool({
 });
 
 initializeApp({
-  credential: applicationDefault(),
+  credential: resolveFirebaseCredential(),
 });
 
 
 async function sendPushToUser(uid, {
-  title = 'TULPAR',
+  title = 'MEKEN',
   body = '',
   data = {},
 } = {}) {
-  const result = await pool.query(
-    `
-    SELECT t.id, t.token
-    FROM user_push_tokens t
-    JOIN users u
-      ON u.id = t.user_id
-    WHERE (u.firebase_uid = $1 OR u.id::text = $1)
-    ORDER BY t.updated_at DESC
-    `,
-    [uid],
-  );
+  const event = data?.type?.toString() || 'unknown';
+  let result;
+  try {
+    result = await pool.query(
+      `
+      SELECT t.id, t.token, u.locale
+      FROM user_push_tokens t
+      JOIN users u
+        ON u.id = t.user_id
+      WHERE (u.firebase_uid = $1 OR u.id::text = $1)
+      ORDER BY t.updated_at DESC
+      `,
+      [uid],
+    );
+  } catch (error) {
+    console.error(
+      `[Push] event=${event} recipientUserId=${uid} stage=token_lookup errorCode=${error?.code ?? 'unknown'}`,
+    );
+    throw error;
+  }
 
   if (result.rows.length === 0) {
-    console.log('[Push] no registered tokens');
+    console.log(
+      `[Push] event=${event} recipientUserId=${uid} tokenCount=0 successCount=0 failureCount=0`,
+    );
     return {
       successCount: 0,
       failureCount: 0,
@@ -90,6 +122,17 @@ async function sendPushToUser(uid, {
   }
 
   const tokens = result.rows.map((row) => row.token);
+  const locale = result.rows[0]?.locale;
+  console.log(
+    `[Push] event=${event} recipientUserId=${uid} tokenCount=${tokens.length} locale=${locale ?? 'ru'} stage=send_attempt`,
+  );
+  const localized = localizedPushCopy({
+    eventType: data?.type,
+    locale,
+    data,
+    fallbackTitle: title,
+    fallbackBody: body,
+  });
 
   const stringData = {};
 
@@ -99,20 +142,29 @@ async function sendPushToUser(uid, {
     }
   }
 
-  const response = await getMessaging().sendEachForMulticast({
-    tokens,
-    notification: {
-      title,
-      body,
-    },
-    data: stringData,
-    android: {
-      priority: 'high',
+  let response;
+  try {
+    response = await getMessaging().sendEachForMulticast({
+      tokens,
       notification: {
-        sound: 'default',
+        title: localized.title,
+        body: localized.body,
       },
-    },
-  });
+      data: stringData,
+      android: {
+        priority: 'high',
+        notification: {
+          sound: 'default',
+          channelId: 'tulpar_orders',
+        },
+      },
+    });
+  } catch (error) {
+    console.error(
+      `[Push] event=${event} recipientUserId=${uid} tokenCount=${tokens.length} stage=firebase_send errorCode=${error?.code ?? 'unknown'}`,
+    );
+    throw error;
+  }
 
   const invalidTokens = [];
 
@@ -123,12 +175,11 @@ async function sendPushToUser(uid, {
 
     const code = item.error?.code ?? 'unknown';
 
-    console.error(`[Push] token failed code=${code}`);
+    console.error(
+      `[Push] event=${event} recipientUserId=${uid} tokenFailureCode=${code}`,
+    );
 
-    if (
-      code === 'messaging/registration-token-not-registered' ||
-      code === 'messaging/invalid-registration-token'
-    ) {
+    if (isPermanentlyInvalidPushTokenError(code)) {
       invalidTokens.push(tokens[index]);
     }
   });
@@ -144,7 +195,7 @@ async function sendPushToUser(uid, {
   }
 
   console.log(
-    `[Push] success=${response.successCount} failure=${response.failureCount}`,
+    `[Push] event=${event} recipientUserId=${uid} tokenCount=${tokens.length} successCount=${response.successCount} failureCount=${response.failureCount} invalidTokenCount=${invalidTokens.length}`,
   );
 
   return {
@@ -162,6 +213,14 @@ const requireAuth = createDualAuthMiddleware({
   pool,
   firebaseAuth: getAuth(),
 });
+const requireCurrentTerms = createRequireCurrentTerms({ pool });
+app.use('/api/users', createUserLocaleRouter({ pool, requireAuth }));
+app.use('/api/terms', createTermsRouter({ pool, requireAuth }));
+app.use('/api/compliance', createStoreComplianceRouter({
+  pool,
+  requireAuth,
+  requireCurrentTerms,
+}));
 
 const tulparSessionService = new AuthSessionService({ pool });
 const tulparOtpService = process.env.TULPAR_AUTH_OTP_SECRET
@@ -169,6 +228,7 @@ const tulparOtpService = process.env.TULPAR_AUTH_OTP_SECRET
   : null;
 
 app.use('/api/auth/verification', authVerificationRateLimiter);
+app.use('/api/auth/login', authVerificationRateLimiter);
 
 app.use(
   '/api/auth',
@@ -179,6 +239,7 @@ app.use(
     smsSender: createSmsSenderFromEnv(),
     authenticateAccessToken: createAccessTokenMiddleware(),
     verificationProvider: createVerificationProviderFromEnv(),
+    passwordService: new PasswordAuthService({ pool }),
   }),
 );
 
@@ -190,6 +251,8 @@ app.use(
   }),
 );
 
+app.use('/api/cities', createCitiesRouter({ pool, requireAuth }));
+
 app.use(
   '/api/orders',
   createOrdersRouter({
@@ -198,6 +261,7 @@ app.use(
     sendToUser,
     sendToAvailableDrivers,
     sendPushToUser,
+    requireCurrentTerms,
   }),
 );
 
@@ -208,12 +272,22 @@ app.use(
 
 app.use(
   '/api/geocoding',
-  createGeocodingRouter({ requireAuth }),
+  createGeocodingRouter({ requireAuth, pool }),
 );
 
 app.use(
   '/api/intercity-rides',
   createIntercityRidesRouter({ pool, requireAuth, sendPushToUser }),
+);
+app.use(
+  '/api/intercity-bookings/:bookingId/messages',
+  createIntercityChatRouter({
+    pool,
+    requireAuth,
+    sendPushToUser,
+    chatSendRateLimiter,
+    requireCurrentTerms,
+  }),
 );
 
 app.use(
@@ -559,7 +633,7 @@ app.patch('/api/users/me', requireAuth, async (req, res) => {
     async (req, res) => {
     try {
       const result = await sendPushToUser(req.user.uid, {
-        title: 'TULPAR',
+        title: 'MEKEN',
         body: 'Тестовое push-уведомление работает!',
         data: {
           type: 'test_push',
@@ -583,34 +657,12 @@ app.patch('/api/users/me', requireAuth, async (req, res) => {
 
   // Сообщения чата конкретного заказа.
   app.get('/api/orders/:orderId/messages', requireAuth, async (req, res) => {
+    if (!isUuid(req.params.orderId)) {
+      return res.status(400).json({ error: 'Invalid orderId' });
+    }
     try {
-      const accessResult = await pool.query(
-        `
-        SELECT o.id
-        FROM orders o
-
-        JOIN users passenger
-          ON passenger.id = o.passenger_id
-
-        LEFT JOIN users driver
-          ON driver.id = o.driver_id
-
-        WHERE
-          o.id = $1
-          AND (
-            passenger.firebase_uid = $2 OR passenger.id::text = $2
-            OR driver.firebase_uid = $2 OR driver.id::text = $2
-          )
-
-        LIMIT 1
-        `,
-        [
-          req.params.orderId,
-          req.user.uid,
-        ],
-      );
-
-      if (accessResult.rows.length === 0) {
+      const viewerId = await findChatViewer(pool, req.params.orderId, req.user.uid);
+      if (!viewerId) {
         return res.status(403).json({
           error: 'Chat access denied',
         });
@@ -638,6 +690,13 @@ app.patch('/api/users/me', requireAuth, async (req, res) => {
         [req.params.orderId],
       );
 
+      await markChatRead(
+        pool,
+        req.params.orderId,
+        viewerId,
+        result.rows[0]?.created_at ?? null,
+      );
+
       res.json({
         messages: result.rows.map((row) => ({
           id: row.id,
@@ -656,9 +715,19 @@ app.patch('/api/users/me', requireAuth, async (req, res) => {
     }
   });
 
+  app.use(
+    '/api/orders/:orderId/messages',
+    createChatUnreadRouter({ pool, requireAuth }),
+  );
+
 
   // Отправка сообщения и push второму участнику заказа.
-  app.post('/api/orders/:orderId/messages', requireAuth, async (req, res) => {
+  app.post(
+    '/api/orders/:orderId/messages',
+    requireAuth,
+    requireCurrentTerms,
+    chatSendRateLimiter,
+    async (req, res) => {
     try {
       const text =
         typeof req.body?.text === 'string'
@@ -675,6 +744,9 @@ app.patch('/api/users/me', requireAuth, async (req, res) => {
         `
         SELECT
           o.id,
+          o.status,
+          passenger.id AS passenger_id,
+          driver.id AS driver_id,
 
           COALESCE(passenger.firebase_uid, passenger.id::text) AS passenger_uid,
           COALESCE(driver.firebase_uid, driver.id::text) AS driver_uid,
@@ -715,6 +787,15 @@ app.patch('/api/users/me', requireAuth, async (req, res) => {
       }
 
       const order = orderResult.rows[0];
+
+      const recipientId = order.sender_id === order.passenger_id
+        ? order.driver_id : order.passenger_id;
+      const isActiveTrip = ['accepted', 'driver_arrived', 'in_progress', 'queued']
+        .includes(order.status);
+      const blocked = await areUsersBlocked(pool, order.sender_id, recipientId);
+      if (!canBlockedPairWriteChat({ blocked, activeTrip: isActiveTrip })) {
+        return res.status(403).json({ code: 'user_blocked', error: 'Chat is blocked after the trip' });
+      }
 
       const messageResult = await pool.query(
         `
@@ -762,6 +843,7 @@ app.patch('/api/users/me', requireAuth, async (req, res) => {
             data: {
               type: 'chat_message',
               orderId: req.params.orderId,
+              messageId: message.id,
             },
           });
         } catch (pushError) {
@@ -785,7 +867,8 @@ app.patch('/api/users/me', requireAuth, async (req, res) => {
         error: 'Failed to send message',
       });
     }
-  });
+    },
+  );
 
 
 app.get('/api/me', requireAuth, async (req, res) => {
@@ -841,30 +924,47 @@ function broadcast(payload) {
 async function sendToAvailableDrivers(payload) {
   try {
     const result = await pool.query(`
-      SELECT COALESCE(u.firebase_uid, u.id::text) AS identity_key
+      SELECT COALESCE(u.firebase_uid, u.id::text) AS identity_key,
+             work_city.slug AS work_city_slug
       FROM users u
       JOIN driver_profiles dp
         ON dp.user_id = u.id
+      JOIN cities work_city ON work_city.id = dp.work_city_id
       WHERE
         dp.status = 'active'
-        AND (
-          dp.access_exempt = TRUE
-          OR EXISTS (
-            SELECT 1
-            FROM driver_subscriptions ds
-            WHERE
-              ds.driver_id = u.id
-              AND ds.status = 'active'
-              AND ds.payment_status = 'paid'
-              AND ds.valid_until > now()
-          )
+        AND ($1::boolean = FALSE OR dp.work_city_id = (
+          SELECT id FROM cities WHERE slug = $2 AND is_enabled = TRUE
+        ))
+        AND NOT EXISTS (
+          SELECT 1 FROM orders notification_order
+          JOIN user_blocks ub
+            ON (ub.blocker_user_id = notification_order.passenger_id AND ub.blocked_user_id = u.id)
+            OR (ub.blocker_user_id = u.id AND ub.blocked_user_id = notification_order.passenger_id)
+          WHERE notification_order.id = $3
         )
-    `);
+    `, [
+      ['city', 'delivery'].includes(payload?.order?.serviceType),
+      payload?.order?.cityId ?? null,
+      payload?.order?.id ?? null,
+    ]);
 
-    for (const row of result.rows) {
+    const recipients = result.rows.filter((row) =>
+      canReceiveLocalOrderNotification(payload?.order, row.work_city_slug));
+    for (const row of recipients) {
       if (row.identity_key) {
         sendToUser(row.identity_key, payload);
       }
+    }
+    if (payload?.type === 'order_created' && payload.order?.id) {
+      await Promise.allSettled(recipients
+        .filter((row) => row.identity_key)
+        .map((row) => sendPushToUser(row.identity_key, {
+          data: {
+            type: 'new_driver_order',
+            orderId: payload.order.id,
+            serviceType: payload.order.serviceType,
+          },
+        })));
     }
   } catch (error) {
     console.error('[WebSocketDrivers]', error);
@@ -960,3 +1060,29 @@ const accountDeletionRetryTimer = setInterval(
 );
 accountDeletionRetryTimer.unref();
 setTimeout(runAccountDeletionRetry, 10 * 1000).unref();
+
+let authHistoryCleanupRunning = false;
+async function runAuthHistoryCleanup() {
+  if (authHistoryCleanupRunning) return;
+  authHistoryCleanupRunning = true;
+  try {
+    const removed = await cleanupExpiredAuthHistory({ pool });
+    const total = removed.passwordVerifications
+      + removed.otpChallenges
+      + removed.sessions;
+    if (total > 0) {
+      console.log(`[AuthHistoryCleanup] removed=${total}`);
+    }
+  } catch (_) {
+    console.error('[AuthHistoryCleanup] status=failed');
+  } finally {
+    authHistoryCleanupRunning = false;
+  }
+}
+
+const authHistoryCleanupTimer = setInterval(
+  runAuthHistoryCleanup,
+  5 * 60 * 1000,
+);
+authHistoryCleanupTimer.unref();
+setTimeout(runAuthHistoryCleanup, 20 * 1000).unref();

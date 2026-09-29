@@ -1,19 +1,26 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../../l10n/generated/app_localizations.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../models/order_service_type.dart';
+import '../../models/order_stops.dart';
 import '../chat/chat_screen.dart';
+import '../../widgets/chat_unread_badge.dart';
+import '../../widgets/order_stops_view.dart';
 import '../../widgets/rating_dialog.dart';
 import '../../widgets/driver_location_marker_layer.dart';
 import '../../widgets/app_drawer.dart';
 import '../../app_routes.dart';
 import '../../services/order_cancellation_controller.dart';
+import '../../widgets/city_order_cancellation_dialog.dart';
+import '../../services/active_order_service.dart';
 import '../../services/order_route_geometry_cache.dart';
 import '../../services/order_offer_service.dart';
 import '../../services/order_workflow_service.dart';
 import '../../services/rating_service.dart';
+import '../../services/address_label_service.dart';
 import '../../services/tulpar_api_client.dart';
 import '../../widgets/order_route_polyline_layer.dart';
 import '../../widgets/delivery_details_view.dart';
@@ -23,6 +30,13 @@ import '../../widgets/tulpar_map_visuals.dart';
 import '../profile/driver_public_profile_screen.dart';
 
 class OrderTrackingScreen extends StatefulWidget {
+  static final Set<_OrderTrackingScreenState> _visibleStates = {};
+  static bool isCurrentOrder(String orderId) => _visibleStates.any(
+    (state) =>
+        state.mounted &&
+        state.widget.orderId == orderId &&
+        ModalRoute.of(state.context)?.isCurrent == true,
+  );
   final String orderId;
 
   const OrderTrackingScreen({
@@ -79,6 +93,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   @override
   void initState() {
     super.initState();
+    OrderTrackingScreen._visibleStates.add(this);
     _currentServiceType = OrderServiceType.fromValue(
       widget.initialOrderData?['serviceType'],
     );
@@ -148,31 +163,50 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     }
   }
 
-  Future<void> _cancelOrder() async {
+  Future<void> _cancelOrder({CityCancellationReason? reason}) async {
     await _cancellationController.cancel(
-      () => OrderWorkflowService().cancelOrder(widget.orderId),
+      () => OrderWorkflowService().cancelOrder(
+        widget.orderId,
+        reasonCode: reason?.code,
+        reasonText: reason?.text,
+      ),
     );
   }
 
-  Future<void> _confirmCancelOrder(BuildContext context) async {
+  Future<void> _confirmCancelOrder(
+    BuildContext context, {
+    bool inProgress = false,
+  }) async {
     if (_isCancelConfirmationOpen || _cancellationController.isCancelling) {
       return;
     }
     _isCancelConfirmationOpen = true;
+    if (inProgress && _currentServiceType == OrderServiceType.city) {
+      try {
+        final reason = await showCityCancellationDialog(
+          context,
+          isDriver: false,
+        );
+        if (reason != null && mounted) await _cancelOrder(reason: reason);
+      } finally {
+        _isCancelConfirmationOpen = false;
+      }
+      return;
+    }
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Отмена заказа'),
-        content: const Text('Вы уверены, что хотите отменить заказ?'),
+        title: Text(AppLocalizations.of(ctx).cancelOrderTitle),
+        content: Text(AppLocalizations.of(ctx).confirmCancelOrder),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Нет'),
+            child: Text(AppLocalizations.of(ctx).no),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Да, отменить'),
+            child: Text(AppLocalizations.of(ctx).yesCancel),
           ),
         ],
       ),
@@ -196,15 +230,19 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '${offer.driverName}: предложение ${offer.price} ₸ принято.',
+            AppLocalizations.of(
+              context,
+            ).offerAccepted(offer.driverName, offer.price.toString()),
           ),
         ),
       );
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.toString())));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(AppLocalizations.of(context).orderOfferAcceptFailed),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _acceptingOfferDriverId = null);
     }
@@ -229,7 +267,10 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
       SnackBar(
         content: Text(message),
         duration: const Duration(days: 1),
-        action: SnackBarAction(label: 'Закрыть', onPressed: () {}),
+        action: SnackBarAction(
+          label: AppLocalizations.of(context).close,
+          onPressed: () {},
+        ),
       ),
     );
     return _cancellationSnackBar!.closed.then<void>((_) {});
@@ -240,11 +281,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     debugPrintStack(stackTrace: stackTrace);
     if (!mounted || _cancellationController.hasHandledCancellation) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Не удалось отменить заказ. Проверьте соединение и повторите попытку.',
-        ),
-      ),
+      SnackBar(content: Text(AppLocalizations.of(context).cancelOrderFailed)),
     );
   }
 
@@ -259,6 +296,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   }
 
   void _handleRemoteCancellation() {
+    ActiveOrderService.clearRememberedOrder();
     if (_cancellationController.hasHandledCancellation) return;
     final requestedLocally = _cancellationController.isCancelling;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -293,6 +331,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   }
 
   void _handleCompletion(Map<String, dynamic> orderData) {
+    ActiveOrderService.clearRememberedOrder();
     if (_hasShownRating) return;
     _hasShownRating = true;
 
@@ -307,7 +346,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             isRatingDriver: true,
             targetLabel:
                 OrderServiceType.fromValue(orderData['serviceType']).isDelivery
-                ? 'курьера'
+                ? AppLocalizations.of(context).ratingCourierObject
                 : null,
             ratingService: widget.ratingService,
           ),
@@ -323,6 +362,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
 
   @override
   void dispose() {
+    OrderTrackingScreen._visibleStates.remove(this);
     _cancellationController.dispose();
     _cancellationSnackBar?.close();
     if (_ownsDriverLocationNotifier) _driverLocationNotifier.dispose();
@@ -333,7 +373,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Ваш заказ'),
+        title: Text(AppLocalizations.of(context).yourOrder),
         backgroundColor: Colors.amber,
         foregroundColor: Colors.black,
       ),
@@ -342,7 +382,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
         selectedServiceType: _currentServiceType,
       ),
       body: _isReturningToMap
-          ? const Center(child: Text('Заказ отменён'))
+          ? Center(child: Text(AppLocalizations.of(context).orderCancelled))
           : StreamBuilder<Map<String, dynamic>?>(
               stream: _orderStream,
               initialData: widget.initialOrderData,
@@ -355,21 +395,30 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                 }
 
                 if (snapshot.hasError && !snapshot.hasData) {
-                  return const Center(
-                    child: Text('Ошибка загрузки данных заказа'),
+                  return Center(
+                    child: Text(AppLocalizations.of(context).orderLoadFailed),
                   );
                 }
 
                 final orderData = snapshot.data;
                 if (orderData == null) {
-                  return const Center(
-                    child: Text('Ошибка загрузки данных заказа'),
+                  return Center(
+                    child: Text(AppLocalizations.of(context).orderLoadFailed),
                   );
                 }
                 _currentServiceType = OrderServiceType.fromValue(
                   orderData['serviceType'],
                 );
                 final status = orderData['status']?.toString() ?? 'searching';
+                if (isActiveOrderStatusForRole(status, isDriver: false)) {
+                  ActiveOrderService.rememberForCurrentSession(
+                    ActiveOrder(
+                      orderId: widget.orderId,
+                      isDriver: false,
+                      data: orderData,
+                    ),
+                  );
+                }
                 final driverId = orderData['driverId']?.toString();
 
                 if (driverId != null && driverId.isNotEmpty) {
@@ -388,8 +437,10 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
 
                 final endpoints = OrderRouteEndpoints.fromOrderData(orderData);
                 if (endpoints == null) {
-                  return const Center(
-                    child: Text('Некорректные координаты заказа'),
+                  return Center(
+                    child: Text(
+                      AppLocalizations.of(context).invalidOrderCoordinates,
+                    ),
                   );
                 }
                 final passengerFrom = endpoints.start;
@@ -432,6 +483,21 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                               point: passengerTo,
                               endpoint: TulparMapEndpoint.destination,
                             ),
+                            for (
+                              var index = 0;
+                              index < endpoints.intermediatePoints.length;
+                              index++
+                            )
+                              TulparMapVisuals.stopMarker(
+                                point: endpoints.intermediatePoints[index],
+                                number: index + 1,
+                                reached:
+                                    index <
+                                        orderStopsFromData(orderData).length &&
+                                    orderStopsFromData(
+                                      orderData,
+                                    )[index].isReached,
+                              ),
                           ],
                         ),
                         DriverLocationMarkerLayer(
@@ -478,34 +544,43 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              InkWell(
-                                key: const Key(
-                                  'passenger_tracking_panel_toggle',
-                                ),
-                                onTap: () => setState(
-                                  () => _isOrderPanelExpanded =
-                                      !_isOrderPanelExpanded,
-                                ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        '${status == 'queued' ? 'Водитель завершает предыдущую поездку' : OrderServiceType.fromValue(orderData['serviceType']).passengerAcceptedText} · ${orderData['toAddress'] ?? ''}',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
+                              if (status != 'searching' ||
+                                  (driverId?.isNotEmpty ?? false))
+                                InkWell(
+                                  key: const Key(
+                                    'passenger_tracking_panel_toggle',
+                                  ),
+                                  onTap: () => setState(
+                                    () => _isOrderPanelExpanded =
+                                        !_isOrderPanelExpanded,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          '${status == 'queued'
+                                              ? AppLocalizations.of(context).statusDriverFinishingPrevious
+                                              : status == 'searching'
+                                              ? OrderServiceType.fromValue(orderData['serviceType']).localizedSearchingText(AppLocalizations.of(context))
+                                              : OrderServiceType.fromValue(orderData['serviceType']).localizedAcceptedText(AppLocalizations.of(context))} · ${AddressLabelService.fromOrder(orderData, Localizations.localeOf(context), const ['toAddress', 'destinationAddress'])}',
+                                          key: const Key(
+                                            'passenger_driver_status_banner',
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                    Icon(
-                                      _isOrderPanelExpanded
-                                          ? Icons.keyboard_arrow_down
-                                          : Icons.keyboard_arrow_up,
-                                    ),
-                                  ],
+                                      Icon(
+                                        _isOrderPanelExpanded
+                                            ? Icons.keyboard_arrow_down
+                                            : Icons.keyboard_arrow_up,
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                              ),
                               if (_isOrderPanelExpanded) ...[
                                 const SizedBox(height: 8),
                                 if (DeliveryDetailsView.isDelivery(
@@ -568,6 +643,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     String? driverId,
   ) {
     final serviceType = OrderServiceType.fromValue(orderData['serviceType']);
+    final l10n = AppLocalizations.of(context);
     switch (status) {
       case 'searching':
         return Column(
@@ -576,7 +652,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             const CircularProgressIndicator(color: Colors.amber),
             const SizedBox(height: 12),
             Text(
-              serviceType.passengerSearchingText,
+              serviceType.localizedSearchingText(l10n),
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
@@ -589,8 +665,8 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                 style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
                 child: Text(
                   _cancellationController.isCancelling
-                      ? 'Отмена...'
-                      : 'Отменить поиск',
+                      ? l10n.cancelling
+                      : l10n.cancelSearch,
                 ),
               ),
             ),
@@ -600,21 +676,22 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
       case 'accepted':
         return _buildDriverCardWithFallback(
           context,
-          title: serviceType.passengerAcceptedText,
+          title: serviceType.localizedAcceptedText(l10n),
           titleColor: Colors.blue,
           orderData: orderData,
           driverId: driverId,
+          showOwnOrderSummary: true,
         );
 
       case 'queued':
         return _buildDriverCardWithFallback(
           context,
-          title: 'Водитель завершает предыдущую поездку',
-          subtitle: 'После завершения водитель сразу направится к вам.',
+          title: l10n.statusDriverFinishingPrevious,
+          subtitle: l10n.queuedOrderHint,
           titleColor: Colors.blue,
           orderData: orderData,
           driverId: driverId,
-          cancelLabel: 'Отменить заказ',
+          cancelLabel: l10n.cancelOrder,
           showOwnOrderSummary: true,
         );
 
@@ -622,40 +699,23 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
       case 'arrived':
         return _buildDriverCardWithFallback(
           context,
-          title: serviceType.passengerArrivedText,
+          title: serviceType.localizedArrivedText(l10n),
           titleColor: Colors.green,
           orderData: orderData,
           driverId: driverId,
           isArrived: true,
+          showOwnOrderSummary: true,
         );
 
       case 'in_progress':
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              serviceType.isDelivery
-                  ? Icons.local_shipping
-                  : Icons.directions_car,
-              color: Colors.green,
-              size: 40,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              serviceType.passengerInProgressText,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.green,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              serviceType.isDelivery
-                  ? 'Адрес получателя: ${orderData['toAddress'] ?? 'Адрес не указан'}'
-                  : 'Направление: ${orderData['toAddress'] ?? 'Адрес не указан'}',
-            ),
-          ],
+        return _buildDriverCardWithFallback(
+          context,
+          title: serviceType.localizedInProgressText(l10n),
+          titleColor: Colors.green,
+          orderData: orderData,
+          driverId: driverId,
+          showOwnOrderSummary: true,
+          showCancel: true,
         );
 
       case 'completed':
@@ -665,27 +725,27 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             const Icon(Icons.check_circle, color: Colors.green, size: 48),
             const SizedBox(height: 8),
             Text(
-              serviceType.passengerCompletedText,
+              serviceType.localizedCompletedText(l10n),
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
           ],
         );
 
       case 'cancelled':
-        return const Column(
+        return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(Icons.cancel, color: Colors.red, size: 48),
             SizedBox(height: 8),
             Text(
-              'Заказ отменен',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              l10n.orderCancelled,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
           ],
         );
 
       default:
-        return Text('Статус заказа: $status');
+        return Text(l10n.orderStatusUnknown(status));
     }
   }
 
@@ -867,7 +927,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     bool isArrived = false,
     String? subtitle,
     bool showCancel = true,
-    String cancelLabel = 'Отменить',
+    String? cancelLabel,
     bool showOwnOrderSummary = false,
   }) {
     final hasCarDataInOrder =
@@ -920,16 +980,17 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     bool isArrived = false,
     String? subtitle,
     bool showCancel = true,
-    String cancelLabel = 'Отменить',
+    String? cancelLabel,
     bool showOwnOrderSummary = false,
   }) {
+    final l10n = AppLocalizations.of(context);
     final serviceType = OrderServiceType.fromValue(orderData['serviceType']);
     final finalDriverName =
         driverName ??
         orderData['driverName']?.toString() ??
-        (serviceType.isDelivery ? 'Курьер' : 'Водитель');
+        (serviceType.isDelivery ? l10n.courier : l10n.driver);
     final finalCarModel =
-        carModel ?? orderData['carModel']?.toString() ?? 'Автомобиль';
+        carModel ?? orderData['carModel']?.toString() ?? l10n.car;
     final finalCarColor = carColor ?? orderData['carColor']?.toString() ?? '';
     final finalCarNumber =
         carNumber ?? orderData['carNumber']?.toString() ?? '';
@@ -965,7 +1026,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
-              serviceType.passengerArrivedHint,
+              serviceType.localizedArrivedHint(l10n),
               style: const TextStyle(
                 color: Colors.green,
                 fontWeight: FontWeight.w600,
@@ -975,20 +1036,18 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
         ],
         const Divider(height: 20),
         if (showOwnOrderSummary) ...[
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text('Откуда: ${orderData['fromAddress'] ?? ''}'),
-          ),
-          const SizedBox(height: 4),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text('Куда: ${orderData['toAddress'] ?? ''}'),
-          ),
+          OrderStopsView(orderData: orderData),
           const SizedBox(height: 4),
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              'Стоимость: ${orderData['agreedPrice'] ?? orderData['price'] ?? orderData['passengerPrice'] ?? ''} ₸',
+              l10n.priceTenge(
+                (orderData['agreedPrice'] ??
+                        orderData['price'] ??
+                        orderData['passengerPrice'] ??
+                        '')
+                    .toString(),
+              ),
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
@@ -1013,9 +1072,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                     ),
                   ),
                   Text(
-                    carDetails.isEmpty
-                        ? 'Данные машины загружаются...'
-                        : carDetails,
+                    carDetails.isEmpty ? l10n.carLoading : carDetails,
                     style: const TextStyle(color: Colors.grey, fontSize: 13),
                   ),
                 ],
@@ -1036,7 +1093,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
           TextButton.icon(
             key: const Key('assigned_driver_profile'),
             icon: const Icon(Icons.person_outline),
-            label: const Text('Профиль водителя'),
+            label: Text(l10n.driverProfile),
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
                 builder: (_) =>
@@ -1048,8 +1105,8 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
           children: [
             Expanded(
               child: ElevatedButton.icon(
-                icon: const Icon(Icons.chat),
-                label: const Text('Чат'),
+                icon: ChatUnreadBadge(orderId: widget.orderId),
+                label: Text(l10n.chat),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.amber,
                   foregroundColor: Colors.black,
@@ -1061,6 +1118,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
                       builder: (_) => ChatScreen(
                         orderId: widget.orderId,
                         peerName: finalDriverName,
+                        peerUserId: orderData['driverId']?.toString(),
                       ),
                     ),
                   );
@@ -1072,14 +1130,17 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
               Expanded(
                 child: OutlinedButton.icon(
                   icon: const Icon(Icons.cancel_outlined),
-                  label: Text(cancelLabel),
+                  label: Text(cancelLabel ?? l10n.cancel),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.red,
                     side: const BorderSide(color: Colors.red),
                   ),
                   onPressed: _cancellationController.isCancelling
                       ? null
-                      : () => _confirmCancelOrder(context),
+                      : () => _confirmCancelOrder(
+                          context,
+                          inProgress: orderData['status'] == 'in_progress',
+                        ),
                 ),
               ),
             ],

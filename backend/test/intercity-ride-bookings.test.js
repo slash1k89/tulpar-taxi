@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import express from 'express';
 import request from 'supertest';
+import { readFileSync } from 'node:fs';
 import { createIntercityRidesRouter } from '../src/routes/intercity-rides.js';
 import { validateIntercityRideBooking } from '../src/intercity-ride-policy.js';
 
@@ -58,6 +59,7 @@ function makeBooking(overrides = {}) {
     pickup_lat: null,
     pickup_lng: null,
     passenger_comment: null,
+    pickup_reached_at: null,
     cancelled_at: null,
     completed_at: null,
     created_at: future,
@@ -134,6 +136,7 @@ function createStatefulPool({
       pickup_lat: booking.pickup_lat,
       pickup_lng: booking.pickup_lng,
       passenger_comment: booking.passenger_comment,
+      pickup_reached_at: booking.pickup_reached_at,
       booking_cancelled_at: booking.cancelled_at,
       booking_completed_at: booking.completed_at,
       booking_created_at: booking.created_at,
@@ -364,6 +367,29 @@ function createStatefulPool({
       };
     }
     if (
+      text.startsWith('UPDATE intercity_ride_bookings b')
+      && text.includes('pickup_reached_at = COALESCE')
+    ) {
+      const [currentBookingId, currentRideId, driverId] = params;
+      const currentRide = state.rides.find(
+        (item) => item.id === currentRideId && item.driver_id === driverId,
+      );
+      const found = state.bookings.find(
+        (item) =>
+          item.id === currentBookingId
+          && item.ride_id === currentRideId
+          && item.status === 'confirmed',
+      );
+      if (
+        !currentRide
+        || currentRide.status !== 'departed'
+        || !found
+        || !found.pickup_address
+      ) return { rows: [] };
+      found.pickup_reached_at ??= new Date().toISOString();
+      return { rows: [{ id: found.id }] };
+    }
+    if (
       text.startsWith('UPDATE intercity_ride_bookings')
       && text.includes("WHERE id = $1")
     ) {
@@ -449,6 +475,7 @@ function createStatefulPool({
       );
       return { rows: found ? [{ '?column?': 1 }] : [] };
     }
+    if (text.includes('FROM user_blocks')) return { rows: [], rowCount: 0 };
     throw new Error(`Unexpected SQL: ${text}`);
   }
 
@@ -590,8 +617,82 @@ test('all booking endpoints require auth', async () => {
     request(app).get('/api/intercity-rides/bookings/mine'),
     request(app).post(`/api/intercity-rides/bookings/${bookingId}/cancel`),
     request(app).get(`/api/intercity-rides/${rideId}/bookings`),
+    request(app).post(
+      `/api/intercity-rides/${rideId}/bookings/${bookingId}/pickup-reached`,
+    ),
   ]);
-  assert.deepEqual(responses.map((item) => item.status), [401, 401, 401, 401]);
+  assert.deepEqual(
+    responses.map((item) => item.status),
+    [401, 401, 401, 401, 401],
+  );
+});
+
+test('pickup reached is driver-owned, persisted and idempotent', async () => {
+  const pool = createStatefulPool({
+    rides: [ride({ status: 'departed' })],
+    bookings: [makeBooking({
+      pickup_address: 'Pickup A',
+      pickup_lat: 51.95,
+      pickup_lng: 66.4,
+    })],
+  });
+  const app = appWith(pool, { uid: 'driver-uid' });
+  const endpoint =
+    `/api/intercity-rides/${rideId}/bookings/${bookingId}/pickup-reached`;
+  const first = await request(app).post(endpoint);
+  const reachedAt = first.body.booking.pickupReachedAt;
+  const repeated = await request(app).post(endpoint);
+
+  assert.equal(first.status, 200);
+  assert.ok(reachedAt);
+  assert.equal(repeated.status, 200);
+  assert.equal(repeated.body.booking.pickupReachedAt, reachedAt);
+});
+
+test('pickup reached rejects foreign driver and inactive booking', async () => {
+  const activePool = createStatefulPool({
+    rides: [ride({ status: 'departed' })],
+    bookings: [makeBooking({
+      pickup_address: 'Pickup A',
+      pickup_lat: 51.95,
+      pickup_lng: 66.4,
+    })],
+  });
+  const endpoint =
+    `/api/intercity-rides/${rideId}/bookings/${bookingId}/pickup-reached`;
+  const foreign = await request(
+    appWith(activePool, { uid: 'passenger-a-uid' }),
+  ).post(endpoint);
+  assert.equal(foreign.status, 409);
+  assert.equal(activePool.state.bookings[0].pickup_reached_at, null);
+
+  const cancelledPool = createStatefulPool({
+    rides: [ride({ status: 'departed' })],
+    bookings: [makeBooking({
+      status: 'cancelled',
+      pickup_address: 'Pickup A',
+      pickup_lat: 51.95,
+      pickup_lng: 66.4,
+    })],
+  });
+  const cancelled = await request(
+    appWith(cancelledPool, { uid: 'driver-uid' }),
+  ).post(endpoint);
+  assert.equal(cancelled.status, 409);
+  assert.equal(cancelledPool.state.bookings[0].pickup_reached_at, null);
+});
+
+test('pickup reached migration adds server truth and remaining index', () => {
+  const sql = readFileSync(
+    new URL(
+      '../migrations/20260921_021_intercity_pickup_reached.sql',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  assert.match(sql, /ADD COLUMN pickup_reached_at timestamptz/);
+  assert.match(sql, /idx_intercity_ride_bookings_remaining_pickups/);
+  assert.match(sql, /pickup_reached_at IS NULL/);
 });
 
 test('invalid ride, booking and client request UUIDs are rejected', async () => {
@@ -1027,9 +1128,10 @@ test('new booking pushes driver once after commit; replay does not push again', 
   assert.equal(pushes.length, 1);
   assert.equal(pushes[0].uid, 'driver-uid');
   assert.deepEqual(pushes[0].payload.data, {
-    type: 'intercity_ride_booked',
+    type: 'intercity_booking_created',
     rideId,
     bookingId: pool.state.bookings[0].id,
+    seats: 2,
   });
   assert.equal(pushes[0].payload.body, 'Пассажир забронировал 2 места');
   const payloadJson = JSON.stringify(pushes[0].payload);
@@ -1143,7 +1245,7 @@ test('depart pushes confirmed passengers once; invalid repeat sends no push', as
   assert.equal(pushes.length, 1);
   assert.equal(pushes[0].uid, 'passenger-a-uid');
   assert.deepEqual(pushes[0].payload.data, {
-    type: 'intercity_ride_departed',
+    type: 'intercity_trip_started',
     rideId,
     bookingId,
   });

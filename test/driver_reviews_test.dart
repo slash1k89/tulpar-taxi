@@ -7,6 +7,7 @@ import 'package:taxi_esil/widgets/rating_dialog.dart';
 import 'package:taxi_esil/services/rating_service.dart';
 import 'package:taxi_esil/services/tulpar_api_client.dart';
 import 'package:taxi_esil/screens/profile/driver_public_profile_screen.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 Future<void> _openRating(
   WidgetTester tester,
@@ -15,6 +16,9 @@ Future<void> _openRating(
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      locale: const Locale('ru'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: Scaffold(
         body: Builder(
           builder: (context) => TextButton(
@@ -110,6 +114,9 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(
         MaterialApp(
+          locale: const Locale('ru'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: DriverPublicProfileScreen(
             orderId: 'order',
             profileLoader: () async => {
@@ -134,7 +141,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('★ 4.8'), findsOneWidget);
-      expect(find.text('Оценок: 37'), findsOneWidget);
+      expect(find.text('37 оценок'), findsOneWidget);
       expect(find.text('ВАЗ 2114'), findsOneWidget);
       expect(find.text('Черный · 908ALI03'), findsOneWidget);
       expect(find.textContaining('Очень длинный отзыв'), findsOneWidget);
@@ -150,6 +157,9 @@ void main() {
     (tester) async {
       await tester.pumpWidget(
         MaterialApp(
+          locale: const Locale('ru'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: DriverPublicProfileScreen(
             orderId: 'order',
             profileLoader: () async => {
@@ -169,6 +179,26 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  for (final (code, noRatings, noReviews) in [
+    ('kk', 'Бағалар жоқ', 'Әзірге пікірлер жоқ'),
+    ('en', 'No ratings', 'No reviews yet'),
+  ]) {
+    testWidgets('public driver profile empty state uses $code', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        locale: Locale(code),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: DriverPublicProfileScreen(
+          orderId: 'order',
+          profileLoader: () async => {'ratingsCount': 0, 'reviews': []},
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.text(noRatings), findsOneWidget);
+      expect(find.text(noReviews), findsOneWidget);
+    });
+  }
 
   test(
     'API sends optional review without client driver identity and uses order-scoped profile',

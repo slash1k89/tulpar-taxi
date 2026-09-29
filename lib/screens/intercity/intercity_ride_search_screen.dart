@@ -8,6 +8,7 @@ import '../../utils/intercity_ride_formatters.dart';
 import '../../widgets/intercity_ride_fields.dart';
 import '../../widgets/tulpar_date_picker.dart';
 import 'intercity_ride_results_screen.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 class IntercityRideSearchScreen extends StatefulWidget {
   const IntercityRideSearchScreen({
@@ -68,13 +69,13 @@ class _IntercityRideSearchScreenState extends State<IntercityRideSearchScreen> {
     final today = DateUtils.dateOnly(DateTime.now());
     String? message;
     if (origin == null || destination == null) {
-      message = 'Выберите города отправления и назначения.';
+      message = AppLocalizations.of(context).intercityChooseCities;
     } else if (_cityKey(origin.name) == _cityKey(destination.name)) {
-      message = 'Города отправления и назначения должны отличаться.';
+      message = AppLocalizations.of(context).intercityDifferentCities;
     } else if (_travelDate.isBefore(today)) {
-      message = 'Дата поездки не может быть в прошлом.';
+      message = AppLocalizations.of(context).intercityDatePast;
     } else if (_seats < 1 || _seats > 7) {
-      message = 'Выберите от 1 до 7 мест.';
+      message = AppLocalizations.of(context).intercitySeatsRange;
     }
     if (message != null) {
       ScaffoldMessenger.of(
@@ -101,19 +102,19 @@ class _IntercityRideSearchScreenState extends State<IntercityRideSearchScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Найти попутку')),
+    appBar: AppBar(title: Text(AppLocalizations.of(context).intercityFindRide)),
     body: SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           IntercityCitySelectionField(
-            label: 'Откуда',
+            label: AppLocalizations.of(context).intercityFrom,
             value: _origin,
             onChanged: (value) => setState(() => _origin = value),
           ),
           const SizedBox(height: 12),
           IntercityCitySelectionField(
-            label: 'Куда',
+            label: AppLocalizations.of(context).intercityTo,
             value: _destination,
             onChanged: (value) => setState(() => _destination = value),
           ),
@@ -122,9 +123,9 @@ class _IntercityRideSearchScreenState extends State<IntercityRideSearchScreen> {
             key: const Key('intercity_travel_date'),
             onTap: _selectDate,
             child: InputDecorator(
-              decoration: const InputDecoration(
-                labelText: 'Дата поездки',
-                prefixIcon: Icon(Icons.calendar_month_outlined),
+              decoration: InputDecoration(
+                labelText: AppLocalizations.of(context).intercityTravelDate,
+                prefixIcon: const Icon(Icons.calendar_month_outlined),
               ),
               child: Text(formatIntercityCalendarDate(_travelDate)),
             ),
@@ -141,7 +142,7 @@ class _IntercityRideSearchScreenState extends State<IntercityRideSearchScreen> {
               key: const Key('intercity_search_submit'),
               onPressed: _search,
               icon: const Icon(Icons.search),
-              label: const Text('Найти поездки'),
+              label: Text(AppLocalizations.of(context).intercityFindTrips),
             ),
           ),
         ],

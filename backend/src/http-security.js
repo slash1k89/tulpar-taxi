@@ -10,6 +10,8 @@ const defaultPushTestWindowMs = 10 * 60 * 1000;
 const defaultPushTestMax = 3;
 const defaultVerificationWindowMs = 10 * 60 * 1000;
 const defaultVerificationMax = 10;
+const defaultChatSendWindowMs = 60 * 1000;
+const defaultChatSendMax = 30;
 const maximumTrustProxyHops = 10;
 
 export function parseTrustProxyHops(value = process.env.TRUST_PROXY_HOPS) {
@@ -131,6 +133,11 @@ function tooManyRequests(_req, res) {
   });
 }
 
+function isChatMessagesRequest(req) {
+  const path = req.originalUrl?.split('?')[0] ?? req.path ?? '';
+  return /^\/api\/orders\/[^/]+\/messages(?:\/|$)/.test(path);
+}
+
 export function createApiRateLimiter({
   windowMs = positiveInteger(
     process.env.API_RATE_LIMIT_WINDOW_MS,
@@ -144,6 +151,36 @@ export function createApiRateLimiter({
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     handler: tooManyRequests,
+    skip: isChatMessagesRequest,
+  });
+}
+
+export function createChatSendRateLimiter({
+  windowMs = positiveInteger(
+    process.env.CHAT_SEND_RATE_LIMIT_WINDOW_MS,
+    defaultChatSendWindowMs,
+  ),
+  limit = positiveInteger(
+    process.env.CHAT_SEND_RATE_LIMIT_MAX,
+    defaultChatSendMax,
+  ),
+} = {}) {
+  return rateLimit({
+    windowMs,
+    limit,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    keyGenerator: (req) => `uid:${req.user.uid}:order:${req.params.orderId}`,
+    handler: (_req, res) => {
+      const rawRetryAfter = Number(res.getHeader('Retry-After'));
+      const retryAfterSeconds = Number.isFinite(rawRetryAfter)
+        ? Math.max(1, Math.ceil(rawRetryAfter))
+        : Math.max(1, Math.ceil(windowMs / 1000));
+      return res.status(429).json({
+        error: 'chat_rate_limited',
+        retryAfterSeconds,
+      });
+    },
   });
 }
 

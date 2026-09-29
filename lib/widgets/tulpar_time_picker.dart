@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../l10n/generated/app_localizations.dart';
 
 const int tulparTimeMinuteStep = 5;
 
@@ -72,7 +73,7 @@ class _TulparTimePickerState extends State<TulparTimePicker> {
               ),
               const SizedBox(height: 16),
               Text(
-                'Выберите время',
+                AppLocalizations.of(context).timePickerChoose,
                 style: theme.textTheme.titleLarge,
                 textAlign: TextAlign.center,
               ),
@@ -87,7 +88,10 @@ class _TulparTimePickerState extends State<TulparTimePicker> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),
-              Text('Часы', style: theme.textTheme.titleMedium),
+              Text(
+                AppLocalizations.of(context).timePickerHours,
+                style: theme.textTheme.titleMedium,
+              ),
               const SizedBox(height: 8),
               _ChoiceGrid(
                 itemCount: 24,
@@ -96,7 +100,10 @@ class _TulparTimePickerState extends State<TulparTimePicker> {
                 onSelected: (value) => setState(() => _hour = value),
               ),
               const SizedBox(height: 20),
-              Text('Минуты', style: theme.textTheme.titleMedium),
+              Text(
+                AppLocalizations.of(context).timePickerMinutes,
+                style: theme.textTheme.titleMedium,
+              ),
               const SizedBox(height: 8),
               _ChoiceGrid(
                 itemCount: 12,
@@ -113,7 +120,7 @@ class _TulparTimePickerState extends State<TulparTimePicker> {
                     child: TextButton(
                       key: const Key('tulpar_time_cancel'),
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('Отмена'),
+                      child: Text(AppLocalizations.of(context).cancel),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -124,7 +131,7 @@ class _TulparTimePickerState extends State<TulparTimePicker> {
                         context,
                         TimeOfDay(hour: _hour, minute: _minute),
                       ),
-                      child: const Text('Готово'),
+                      child: Text(AppLocalizations.of(context).timePickerDone),
                     ),
                   ),
                 ],

@@ -2,14 +2,28 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../l10n/generated/app_localizations.dart';
+
 import '../../services/tulpar_api_client.dart';
 import '../../services/app_identity_service.dart';
+import '../../services/chat_notification_service.dart';
+import '../../widgets/chat_unread_badge.dart';
 
 class ChatScreen extends StatefulWidget {
   final String orderId;
   final String peerName;
+  final TulparApiClient? apiClient;
+  final bool intercity;
+  final String? peerUserId;
 
-  const ChatScreen({super.key, required this.orderId, required this.peerName});
+  const ChatScreen({
+    super.key,
+    required this.orderId,
+    required this.peerName,
+    this.apiClient,
+    this.intercity = false,
+    this.peerUserId,
+  });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -18,22 +32,107 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController = TextEditingController();
 
-  final TulparApiClient _api = TulparApiClient();
+  late final TulparApiClient _api;
 
   final String _currentUserId = AppIdentityService().currentUserId ?? '';
 
   Timer? _refreshTimer;
+  Timer? _sendRetryTimer;
+  DateTime? _sendBlockedUntil;
 
   List<Map<String, dynamic>> _messages = const [];
 
   bool _isLoading = true;
   bool _isSending = false;
 
-  String? _error;
+  Object? _error;
+
+  String? get _peerUserId {
+    if (widget.peerUserId?.isNotEmpty ?? false) return widget.peerUserId;
+    for (final message in _messages) {
+      final sender = message['senderId']?.toString();
+      if (sender != null && sender.isNotEmpty && sender != _currentUserId) {
+        return sender;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _reportPeer() async {
+    final peer = _peerUserId;
+    if (peer == null) return;
+    final l10n = AppLocalizations.of(context);
+    final choices = [
+      ('abuse', l10n.reportReasonAbuse),
+      ('harassment', l10n.reportReasonHarassment),
+      ('spam', l10n.reportReasonSpam),
+      ('unsafe_behavior', l10n.reportReasonUnsafe),
+      ('inappropriate_content', l10n.reportReasonInappropriate),
+      ('other', l10n.reportReasonOther),
+    ];
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: Text(AppLocalizations.of(dialogContext).reportUser),
+        children: choices
+            .map(
+              (item) => SimpleDialogOption(
+                onPressed: () => Navigator.pop(dialogContext, item.$1),
+                child: Text(item.$2),
+              ),
+            )
+            .toList(),
+      ),
+    );
+    if (reason == null || !mounted) return;
+    await _api.createContentReport(
+      reportedUserId: peer,
+      contextType: widget.intercity ? 'intercity_chat' : 'city_chat',
+      reasonCode: reason,
+      bookingId: widget.intercity ? widget.orderId : null,
+      orderId: widget.intercity ? null : widget.orderId,
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(AppLocalizations.of(context).reportSent)),
+      );
+    }
+  }
+
+  Future<void> _blockPeer() async {
+    final peer = _peerUserId;
+    if (peer == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(AppLocalizations.of(dialogContext).blockUser),
+        content: Text(AppLocalizations.of(dialogContext).blockUserConfirm),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(AppLocalizations.of(dialogContext).cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(AppLocalizations.of(dialogContext).blockUser),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _api.blockUser(peer);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(AppLocalizations.of(context).userBlocked)),
+      );
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    _api = widget.apiClient ?? TulparApiClient();
+    chatNotificationService.openChat(widget.orderId);
 
     _loadMessages();
 
@@ -45,14 +144,19 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    chatNotificationService.closeChat(widget.orderId);
+    ChatUnreadBadge.refreshOrder(widget.orderId);
     _refreshTimer?.cancel();
+    _sendRetryTimer?.cancel();
     _messageController.dispose();
     super.dispose();
   }
 
   Future<void> _loadMessages({bool silent = false}) async {
     try {
-      final messages = await _api.getChatMessages(widget.orderId);
+      final messages = widget.intercity
+          ? await _api.getIntercityChatMessages(widget.orderId)
+          : await _api.getChatMessages(widget.orderId);
 
       if (!mounted) return;
 
@@ -64,13 +168,33 @@ class _ChatScreenState extends State<ChatScreen> {
           _isLoading = false;
         }
       });
+      try {
+        if (widget.intercity) {
+          await _api.markIntercityChatRead(widget.orderId);
+        } else {
+          await _api.markChatRead(widget.orderId);
+        }
+        if (mounted) {
+          ChatUnreadBadge.markReadConfirmed(
+            widget.orderId,
+            intercity: widget.intercity,
+          );
+        }
+      } catch (error) {
+        debugPrint('[Chat] mark read failed: $error');
+        ChatUnreadBadge.refreshOrder(widget.orderId);
+      }
     } catch (error) {
       if (!mounted) return;
+
+      if (error is TulparApiException && error.statusCode == 429) {
+        _startSendRetry(error.retryAfterSeconds ?? 1);
+      }
 
       if (!silent) {
         setState(() {
           _isLoading = false;
-          _error = _messageForError(error);
+          _error = error;
         });
       }
 
@@ -79,7 +203,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _sendMessage() async {
-    if (_isSending) return;
+    if (_isSending || _isSendRateLimited) return;
 
     final text = _messageController.text.trim();
 
@@ -88,7 +212,14 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _isSending = true);
 
     try {
-      await _api.sendChatMessage(orderId: widget.orderId, text: text);
+      if (widget.intercity) {
+        await _api.sendIntercityChatMessage(
+          bookingId: widget.orderId,
+          text: text,
+        );
+      } else {
+        await _api.sendChatMessage(orderId: widget.orderId, text: text);
+      }
 
       _messageController.clear();
 
@@ -109,27 +240,45 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _messageForError(Object error) {
+    final l10n = AppLocalizations.of(context);
     if (error is TulparApiException) {
       switch (error.statusCode) {
         case 400:
-          return 'Сообщение должно содержать от 1 до 2000 символов.';
+          return l10n.chatInvalidLength;
 
         case 401:
-          return 'Ошибка в данных или параметрах запроса.';
+          return l10n.chatInvalidRequest;
 
         case 403:
-          return 'У вас нет доступа к этому заказу.';
+          return l10n.chatForbidden;
 
         case 404:
-          return 'Заказ не найден.';
+          return l10n.chatOrderNotFound;
+
+        case 429:
+          return l10n.chatRateLimited(error.retryAfterSeconds ?? 1);
 
         default:
-          return error.message;
+          return l10n.chatSendFailed;
       }
     }
 
-    return 'Не удалось отправить сообщение.';
+    return l10n.chatSendFailed;
   }
+
+  void _startSendRetry(int seconds) {
+    _sendRetryTimer?.cancel();
+    _sendBlockedUntil = DateTime.now().add(Duration(seconds: seconds));
+    setState(() {});
+    _sendRetryTimer = Timer(Duration(seconds: seconds), () {
+      if (mounted) {
+        setState(() => _sendBlockedUntil = null);
+      }
+    });
+  }
+
+  bool get _isSendRateLimited =>
+      _sendBlockedUntil?.isAfter(DateTime.now()) ?? false;
 
   DateTime? _parseDate(dynamic value) {
     if (value == null) return null;
@@ -158,6 +307,29 @@ class _ChatScreenState extends State<ChatScreen> {
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(widget.peerName),
+        actions: [
+          PopupMenuButton<String>(
+            enabled: _peerUserId != null,
+            onSelected: (value) {
+              if (value == 'report') {
+                unawaited(_reportPeer());
+              }
+              if (value == 'block') {
+                unawaited(_blockPeer());
+              }
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'report',
+                child: Text(AppLocalizations.of(context).reportUser),
+              ),
+              PopupMenuItem(
+                value: 'block',
+                child: Text(AppLocalizations.of(context).blockUser),
+              ),
+            ],
+          ),
+        ],
         backgroundColor: Colors.amber,
         foregroundColor: Colors.black,
       ),
@@ -184,11 +356,11 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(_error!, textAlign: TextAlign.center),
+              Text(_messageForError(_error!), textAlign: TextAlign.center),
               const SizedBox(height: 12),
               ElevatedButton(
                 onPressed: _loadMessages,
-                child: const Text('Повторить'),
+                child: Text(AppLocalizations.of(context).retry),
               ),
             ],
           ),
@@ -197,7 +369,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     if (_messages.isEmpty) {
-      return const Center(child: Text('Нет сообщений. Напишите первым!'));
+      return Center(child: Text(AppLocalizations.of(context).chatEmpty));
     }
 
     return RefreshIndicator(
@@ -284,8 +456,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 maxLength: 2000,
                 minLines: 1,
                 maxLines: 4,
-                decoration: const InputDecoration(
-                  hintText: 'Сообщение...',
+                decoration: InputDecoration(
+                  hintText: AppLocalizations.of(context).chatMessageHint,
                   border: InputBorder.none,
                   counterText: '',
                 ),
@@ -299,7 +471,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.send, color: Colors.amber),
-              onPressed: _isSending ? null : _sendMessage,
+              onPressed: _isSending || _isSendRateLimited ? null : _sendMessage,
             ),
           ],
         ),

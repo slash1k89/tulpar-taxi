@@ -28,7 +28,7 @@ void main() {
     }
   });
 
-  for (final degrees in [0.0, 90.0, 270.0, 60.0]) {
+  for (final degrees in [0.0, 90.0, 270.0, 40.0]) {
     test('route bearing follows $degrees degrees instead of sensor', () {
       const start = LatLng(51, 71);
       final end = const Distance().offset(start, 60, degrees);
@@ -78,6 +78,51 @@ void main() {
     expect(controller.canApply(current), isTrue);
     controller.reset();
     expect(controller.canApply(current), isFalse);
+  });
+
+  test('manual gesture disables follow and GPS action restores it', () {
+    final controller = NavigationCameraController();
+    expect(controller.following, isTrue);
+    controller.suspendFollow();
+    expect(controller.following, isFalse);
+    controller.resumeFollow();
+    expect(controller.following, isTrue);
+  });
+
+  test('GPS, route/status rebuild and reroute keep follow enabled', () {
+    final controller = NavigationCameraController();
+    controller.update(position: const LatLng(51.95, 66.4));
+    controller.restoreAfterNavigationChange();
+    expect(controller.following, isTrue);
+    controller.restoreAfterNavigationChange();
+    expect(controller.following, isTrue);
+  });
+
+  test('locale/rebuild preserves an explicit user gesture suspension', () {
+    final controller = NavigationCameraController();
+    controller.suspendFollow();
+    controller.restoreAfterNavigationChange();
+    expect(controller.following, isFalse);
+    expect(controller.userSuspended, isTrue);
+    controller.resumeFollow();
+    expect(controller.following, isTrue);
+    expect(controller.userSuspended, isFalse);
+  });
+
+  test('camera update exposes route and target bearings for application', () {
+    const start = LatLng(51, 71);
+    final end = const Distance().offset(start, 60, 40);
+    final controller = NavigationCameraController(headingSmoothing: 1);
+    final update = controller.update(
+      position: start,
+      routeAhead: [start, end],
+      reportedHeadingDegrees: 180,
+      speedMetersPerSecond: 5,
+    );
+
+    expect(update.routeBearingDegrees, closeTo(40, 0.2));
+    expect(update.targetHeadingDegrees, closeTo(40, 0.2));
+    expect(update.headingDegrees, closeTo(40, 0.2));
   });
 
   test('short GPS steps accumulate enough displacement for fallback', () {
@@ -185,5 +230,79 @@ void main() {
 
     expect(controller.headingDegrees, isNull);
     expect(update.didUpdateHeading, isFalse);
+  });
+
+  test(
+    'a real route turn overrides a stale sensor and recenter snaps exactly',
+    () {
+      const corner = LatLng(51.95, 66.4);
+      final west = const Distance().offset(corner, 35, 270);
+      final east = const Distance().offset(corner, 35, 90);
+      final north = const Distance().offset(corner, 35, 0);
+      final controller = NavigationCameraController();
+      controller.update(position: west, routeAhead: [west, corner]);
+      final turn = controller.update(
+        position: corner,
+        routeAhead: [west, corner, north],
+        reportedHeadingDegrees: 45,
+        speedMetersPerSecond: 4,
+      );
+      expect(turn.routeBearingDegrees, closeTo(0, 1));
+      final recentered = controller.update(
+        position: corner,
+        routeAhead: [corner, east],
+        reportedHeadingDegrees: 45,
+        speedMetersPerSecond: 4,
+        snapToRoute: true,
+      );
+      expect(recentered.routeBearingDegrees, closeTo(90, 1));
+      expect(recentered.headingDegrees, closeTo(90, 1));
+    },
+  );
+
+  test(
+    'reroute immediately changes the route bearing at the same GPS point',
+    () {
+      const position = LatLng(51.95, 66.4);
+      final controller = NavigationCameraController(headingSmoothing: 1);
+      controller.update(
+        position: position,
+        routeAhead: [position, const Distance().offset(position, 50, 0)],
+      );
+      controller.restoreAfterNavigationChange();
+      final rerouted = controller.update(
+        position: position,
+        routeAhead: [position, const Distance().offset(position, 50, 90)],
+      );
+      expect(rerouted.routeBearingDegrees, closeTo(90, 1));
+      expect(rerouted.headingDegrees, closeTo(90, 1));
+    },
+  );
+
+  testWidgets('gesture follow resumes after 3.5 seconds of inactivity', (
+    tester,
+  ) async {
+    final camera = NavigationCameraController();
+    var active = true;
+    final timer = NavigationFollowResumeTimer(
+      canResume: () => active,
+      onResume: camera.resumeFollow,
+    );
+    camera.suspendFollow();
+    timer.schedule();
+    await tester.pump(const Duration(seconds: 3));
+    expect(camera.following, isFalse);
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(camera.following, isTrue);
+    camera.suspendFollow();
+    timer.schedule();
+    await tester.pump(const Duration(seconds: 3));
+    timer.schedule(); // a second gesture resets the clock
+    await tester.pump(const Duration(seconds: 1));
+    expect(camera.following, isFalse);
+    active = false; // navigation ended or map closed
+    await tester.pump(const Duration(seconds: 3));
+    expect(camera.following, isFalse);
+    timer.dispose();
   });
 }

@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:audioplayers/audioplayers.dart';
 
+import 'voice_asset_service.dart';
+
 abstract interface class NavigationFallbackSpeaker {
   Future<void> speak(String text);
   Future<void> stop();
@@ -95,11 +97,14 @@ class NavigationAudioService implements NavigationAudioOutput {
   NavigationAudioService({
     NavigationAssetPlayer? assetPlayer,
     required NavigationFallbackSpeaker fallbackSpeaker,
+    String Function(String assetPath)? assetPathResolver,
   }) : _assetPlayer = assetPlayer ?? AudioplayersNavigationAssetPlayer(),
-       _fallbackSpeaker = fallbackSpeaker;
+       _fallbackSpeaker = fallbackSpeaker,
+       _assetPathResolver = assetPathResolver ?? localizedVoiceAssetPath;
 
   final NavigationAssetPlayer _assetPlayer;
   final NavigationFallbackSpeaker _fallbackSpeaker;
+  final String Function(String assetPath) _assetPathResolver;
   int _commandGeneration = 0;
   bool _disposed = false;
 
@@ -119,7 +124,7 @@ class NavigationAudioService implements NavigationAudioOutput {
     try {
       for (final assetPath in cue.assetPaths) {
         if (_disposed || generation != _commandGeneration) return;
-        await _assetPlayer.playAsset(assetPath);
+        await _assetPlayer.playAsset(_assetPathResolver(assetPath));
       }
     } catch (_) {
       if (_disposed || generation != _commandGeneration) return;

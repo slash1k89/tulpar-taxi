@@ -86,8 +86,10 @@ class IntercityRideBooking {
     this.pickupLat,
     this.pickupLng,
     this.passengerComment,
+    this.pickupReachedAt,
     this.createdAt,
     this.updatedAt,
+    this.chatAvailable = false,
   });
 
   final String bookingId;
@@ -105,8 +107,10 @@ class IntercityRideBooking {
   final double? pickupLat;
   final double? pickupLng;
   final String? passengerComment;
+  final DateTime? pickupReachedAt;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  final bool chatAvailable;
 
   bool get canCancel => status == IntercityRideBookingStatus.confirmed;
 
@@ -146,8 +150,10 @@ class IntercityRideBooking {
       pickupLat: intercityDouble(json['pickupLat']),
       pickupLng: intercityDouble(json['pickupLng']),
       passengerComment: _nullableText(json['passengerComment']),
+      pickupReachedAt: intercityDateTime(json['pickupReachedAt']),
       createdAt: intercityDateTime(json['createdAt']),
       updatedAt: intercityDateTime(json['updatedAt']),
+      chatAvailable: json['chatAvailable'] == true,
     );
   }
 }

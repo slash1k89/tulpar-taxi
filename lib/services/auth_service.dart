@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'tulpar_api_client.dart';
+import 'locale_controller.dart';
 
 class AuthService {
   AuthService({FirebaseAuth? auth, TulparApiClient? apiClient})
@@ -35,6 +38,7 @@ class AuthService {
       }
 
       await _apiClient.syncCurrentUser(name: name.trim(), phone: phone.trim());
+      unawaited(appLocaleController.syncIfAuthenticated());
 
       return null;
     } on FirebaseAuthException catch (error) {
@@ -86,6 +90,7 @@ class AuthService {
       // беспечиваем наличие пользователя в PostgreSQL даже для старого
       // Firebase-аккаунта, созданного до перехода на VPS.
       await _apiClient.syncCurrentUser(phone: phone.trim());
+      unawaited(appLocaleController.syncIfAuthenticated());
 
       return null;
     } on FirebaseAuthException {

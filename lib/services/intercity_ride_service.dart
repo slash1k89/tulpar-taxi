@@ -52,6 +52,11 @@ abstract interface class IntercityDriverRideRepository {
 
   Future<List<IntercityRideBooking>> getDriverRideBookings(String rideId);
 
+  Future<IntercityRideBooking> markPickupReached({
+    required String rideId,
+    required String bookingId,
+  });
+
   Future<IntercityRide> updateDriverRide({
     required String rideId,
     required IntercityDriverRideDraft draft,
@@ -213,6 +218,18 @@ class IntercityRideService
   }
 
   @override
+  Future<IntercityRideBooking> markPickupReached({
+    required String rideId,
+    required String bookingId,
+  }) async {
+    final response = await _apiClient.markIntercityPickupReached(
+      rideId: rideId,
+      bookingId: bookingId,
+    );
+    return _booking(response['booking'], 'Точка посадки не обновлена');
+  }
+
+  @override
   Future<IntercityRide> updateDriverRide({
     required String rideId,
     required IntercityDriverRideDraft draft,
@@ -271,3 +288,15 @@ String formatIntercityApiDate(DateTime date) =>
     '${date.year.toString().padLeft(4, '0')}-'
     '${date.month.toString().padLeft(2, '0')}-'
     '${date.day.toString().padLeft(2, '0')}';
+
+List<IntercityPickupDraft> intercityNavigationPickups(
+  Iterable<IntercityRideBooking> bookings,
+) => bookings
+    .where(
+      (booking) =>
+          booking.status == IntercityRideBookingStatus.confirmed &&
+          booking.pickupReachedAt == null &&
+          booking.pickup != null,
+    )
+    .map((booking) => booking.pickup!)
+    .toList(growable: false);

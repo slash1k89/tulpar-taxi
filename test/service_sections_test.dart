@@ -7,6 +7,7 @@ import 'package:taxi_esil/screens/map/map_screen.dart';
 import 'package:taxi_esil/services/order_creation_service.dart';
 import 'package:taxi_esil/services/push_notification_service.dart';
 import 'package:taxi_esil/widgets/app_drawer.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 void main() {
   testWidgets('passenger services are separate map sections', (tester) async {
@@ -65,6 +66,9 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         routes: {
           '/': (_) => Scaffold(
             appBar: AppBar(),
@@ -81,7 +85,7 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
     expect(find.text('Заказать такси'), findsOneWidget);
     expect(find.text('Доставка'), findsOneWidget);
@@ -97,13 +101,16 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           appBar: AppBar(),
           drawer: const AppDrawer(mode: AppMode.driver, userLabel: 'driver'),
         ),
       ),
     );
-    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.tap(find.byIcon(Icons.menu));
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('drawer_service_city')), findsOneWidget);
@@ -118,6 +125,9 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: DriverScreen(
           key: const ValueKey('active-driver-order'),
           userId: 'driver-1',
@@ -131,6 +141,9 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: DriverScreen(
           key: const ValueKey('accepted-driver-order'),
           userId: 'driver-1',
@@ -224,9 +237,9 @@ void main() {
     );
   });
 
-  test('foreground arrival banner is suppressed', () {
-    expect(shouldShowForegroundPushBanner('driver_arrived'), isFalse);
-    expect(shouldShowForegroundPushBanner('arrived'), isFalse);
+  test('foreground arrival banner is shown for both arrival status forms', () {
+    expect(shouldShowForegroundPushBanner('driver_arrived'), isTrue);
+    expect(shouldShowForegroundPushBanner('arrived'), isTrue);
     expect(shouldShowForegroundPushBanner('in_progress'), isTrue);
   });
 
@@ -251,6 +264,9 @@ void main() {
 Future<void> _pumpMap(WidgetTester tester, OrderServiceType serviceType) async {
   await tester.pumpWidget(
     MaterialApp(
+      locale: const Locale('ru'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: MapScreen(
         key: ValueKey(serviceType),
         serviceType: serviceType,

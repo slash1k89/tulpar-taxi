@@ -158,8 +158,8 @@ test('anonymization SQL failure rolls back the whole transaction', async () => {
       const normalized = sql.trim();
       statements.push(normalized);
       if (normalized === 'BEGIN' || normalized === 'ROLLBACK') return { rowCount: 0, rows: [] };
-      if (normalized.startsWith('SELECT id FROM users')) {
-        return { rowCount: 1, rows: [{ id: 'user-1' }] };
+      if (normalized.startsWith('SELECT id, phone FROM users')) {
+        return { rowCount: 1, rows: [{ id: 'user-1', phone: '+77000000001' }] };
       }
       if (normalized.startsWith('SELECT 1')) return { rowCount: 0, rows: [] };
       if (normalized.startsWith('INSERT INTO account_deletion_jobs')) {
@@ -185,6 +185,62 @@ test('anonymization SQL failure rolls back the whole transaction', async () => {
   assert.ok(statements.includes('ROLLBACK'));
   assert.equal(statements.includes('COMMIT'), false);
   assert.equal(released, true);
+});
+
+test('deletion clears auth PII and exact route data without deleting order history', async () => {
+  const statements = [];
+  const client = {
+    async query(sql, values = []) {
+      const normalized = sql.trim();
+      statements.push({ sql: normalized, values });
+      if (normalized === 'BEGIN' || normalized === 'COMMIT') {
+        return { rowCount: 0, rows: [] };
+      }
+      if (normalized.startsWith('SELECT id, phone FROM users')) {
+        return {
+          rowCount: 1,
+          rows: [{ id: 'user-1', phone: '+77000000001' }],
+        };
+      }
+      if (normalized.startsWith('SELECT 1')) return { rowCount: 0, rows: [] };
+      if (normalized.startsWith('INSERT INTO account_deletion_jobs')) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: 'job-1', user_id: 'user-1',
+            firebase_uid: 'firebase-1', status: 'pending',
+          }],
+        };
+      }
+      return { rowCount: 1, rows: [] };
+    },
+    release() {},
+  };
+
+  const result = await beginAccountDeletion({
+    pool: { connect: async () => client },
+    firebaseUid: 'firebase-1',
+  });
+  assert.equal(result.kind, 'created');
+
+  const sql = statements.map((item) => item.sql).join('\n');
+  assert.match(sql, /DELETE FROM auth_password_verifications/);
+  assert.match(sql, /DELETE FROM auth_otp_challenges/);
+  assert.match(sql, /UPDATE order_stops s[\s\S]*address = NULL[\s\S]*latitude = NULL[\s\S]*longitude = NULL/);
+  assert.match(sql, /UPDATE intercity_rides[\s\S]*origin_lat = NULL[\s\S]*destination_lat = NULL/);
+  assert.match(sql, /UPDATE orders[\s\S]*driver_lat = NULL/);
+  assert.match(sql, /UPDATE order_messages SET text = '\[сообщение удалено\]'/);
+  assert.doesNotMatch(sql, /DELETE FROM orders\b/);
+  assert.doesNotMatch(sql, /DELETE FROM order_messages\b/);
+  assert.doesNotMatch(sql, /DELETE FROM ratings\b/);
+  assert.doesNotMatch(sql, /(?:DELETE FROM|UPDATE) content_reports\b/);
+
+  const passwordCleanup = statements.find((item) =>
+    item.sql.startsWith('DELETE FROM auth_password_verifications'));
+  const otpCleanup = statements.find((item) =>
+    item.sql.startsWith('DELETE FROM auth_otp_challenges'));
+  assert.deepEqual(passwordCleanup.values, ['user-1', '+77000000001']);
+  assert.deepEqual(otpCleanup.values, ['+77000000001']);
 });
 
 test('Firebase retryable failure returns deletion_pending', async () => {

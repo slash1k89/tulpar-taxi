@@ -5,6 +5,7 @@ import express from 'express';
 import request from 'supertest';
 
 import { createGeocodingRouter } from '../src/routes/geocoding.js';
+import { wordPrefixMatches } from '../src/geocoding-candidates.js';
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -13,7 +14,7 @@ function jsonResponse(body, status = 200) {
   });
 }
 
-function appFor(fetchImpl, { timeoutMs = 50, auth = true } = {}) {
+function appFor(fetchImpl, { timeoutMs = 50, auth = true, pool } = {}) {
   const app = express();
   const requireAuth = (req, res, next) =>
     !auth || req.headers.authorization === 'Bearer test'
@@ -21,10 +22,89 @@ function appFor(fetchImpl, { timeoutMs = 50, auth = true } = {}) {
       : res.status(401).json({ error: 'Missing authorization token' });
   app.use(
     '/api/geocoding',
-    createGeocodingRouter({ fetchImpl, timeoutMs, requireAuth }),
+    createGeocodingRouter({ fetchImpl, timeoutMs, requireAuth, pool }),
   );
   return app;
 }
+
+test('real Esil streets match from two letters and every word prefix', async () => {
+  let upstreamCalls = 0;
+  const app = appFor(async () => { upstreamCalls++; return jsonResponse([]); });
+  for (const [query, street] of [
+    ['Мы', 'Мырзашева'], ['Мыр', 'Мырзашева'],
+    ['Иге', 'Тын Игерушилер'], ['Игер', 'Тын Игерушилер'],
+    ['Тын', 'Тын Игерушилер'],
+  ]) {
+    const response = await request(app).get('/api/geocoding/search')
+      .query({ query, settlement: 'Есиль' })
+      .set('Authorization', 'Bearer test');
+    assert.equal(response.status, 200);
+    assert.ok(response.body.results.some((item) =>
+      item.kind === 'street' && item.displayName.includes(street)), query);
+  }
+  assert.equal(upstreamCalls, 0);
+});
+
+test('street house prefix returns only real OSM addresses', async () => {
+  const app = appFor(async () => jsonResponse([]));
+  const response = await request(app).get('/api/geocoding/search')
+    .query({ query: 'Игерушилер 66', settlement: 'Есиль' })
+    .set('Authorization', 'Bearer test');
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.results.map((item) => item.address.house_number).sort(),
+    ['66', '66А']);
+});
+
+test('verified POI aliases outrank generic OSM street candidates', async () => {
+  const aliases = ['вок', 'жд вокзал', 'боль', 'шко', 'акимат'];
+  const pool = { query: async () => ({ rows: [{
+    id: 'poi-1', name: 'Вокзал', category: 'transport',
+    address: 'Есиль', latitude: 51.95, longitude: 66.4,
+    aliases,
+  }] }) };
+  const app = appFor(async () => jsonResponse([]), { pool });
+  for (const query of aliases) {
+    const response = await request(app).get('/api/geocoding/search')
+      .query({ query, settlement: 'Есиль' })
+      .set('Authorization', 'Bearer test');
+    assert.equal(response.status, 200);
+    assert.equal(response.body.results[0].id, 'tulpar-poi-1');
+  }
+});
+
+test('city-scoped autocomplete never calls public upstream and rejects disabled city', async () => {
+  let upstreamCalls = 0;
+  const queries = [];
+  const pool = { async query(sql, values = []) {
+    queries.push({ sql, values });
+    if (sql.includes('FROM cities')) {
+      return { rows: values[0] === 'rudny'
+        ? [{ id: 5, slug: 'rudny', name_ru: 'Рудный' }] : [] };
+    }
+    if (sql.includes('FROM tulpar_places')) return { rows: [] };
+    if (sql.includes('autocomplete_candidate_terms')) {
+      return { rows: [{ kind: 'street', name: 'Абая', house_number: null,
+        category: null, latitude: 52.96, longitude: 63.13,
+        osm_type: 'way', osm_id: 42 }] };
+    }
+    throw new Error('Unexpected SQL');
+  } };
+  const app = appFor(async () => { upstreamCalls++; return jsonResponse([]); }, { pool });
+  const found = await request(app).get('/api/geocoding/search')
+    .query({ cityId: 'rudny', query: 'Аба', kind: 'address' })
+    .set('Authorization', 'Bearer test');
+  assert.equal(found.status, 200);
+  assert.equal(found.body.results[0].cityId, 'rudny');
+  assert.equal(found.body.results[0].lat, 52.96);
+  assert.ok(queries.some(({ sql, values }) =>
+    sql.includes('autocomplete_candidate_terms') && values[0] === 5));
+  assert.equal(upstreamCalls, 0);
+  const invalid = await request(app).get('/api/geocoding/search')
+    .query({ cityId: 'disabled', query: 'Аба' })
+    .set('Authorization', 'Bearer test');
+  assert.equal(invalid.status, 400);
+  assert.equal(upstreamCalls, 0);
+});
 
 const reverseBody = {
   place_id: 7,
@@ -37,6 +117,13 @@ const reverseBody = {
     country_code: 'kz',
   },
 };
+
+test('prefix matching is case-insensitive, NFC-safe and hyphen-aware', () => {
+  assert.equal(wordPrefixMatches('Тын Игерушилер', '  иГе '), true);
+  assert.equal(wordPrefixMatches('Ауэзов-Жолы', 'жол'), true);
+  assert.equal(wordPrefixMatches('Әлім', 'Әл'), true);
+  assert.equal(wordPrefixMatches('Йол', 'И\u0306о'), true);
+});
 
 test('reverse validates auth, normalizes response and fixes upstream host', async () => {
   let calledUrl;

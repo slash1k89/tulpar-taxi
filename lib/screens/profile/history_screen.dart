@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../models/order_service_type.dart';
+import '../../l10n/generated/app_localizations.dart';
 import '../../services/tulpar_api_client.dart';
+import '../../services/address_label_service.dart';
 import '../../widgets/app_drawer.dart';
 
 class HistoryScreen extends StatefulWidget {
@@ -45,9 +47,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return value.toString();
   }
 
-  String _address(dynamic value) {
-    final text = value?.toString().trim() ?? '';
-    return text.isEmpty ? 'Адрес не указан' : text;
+  String _address(Map<String, dynamic> order, List<String> keys) {
+    final text = AddressLabelService.fromOrder(
+      order,
+      Localizations.localeOf(context),
+      keys,
+    );
+    return text.isEmpty ? AppLocalizations.of(context).historyNoAddress : text;
   }
 
   String _dateText(Map<String, dynamic> order) {
@@ -71,7 +77,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   String _roleText(Map<String, dynamic> order) {
-    return order['role'] == 'driver' ? 'Я — водитель' : 'Я — пассажир';
+    return order['role'] == 'driver'
+        ? AppLocalizations.of(context).historyDriverRole
+        : AppLocalizations.of(context).historyPassengerRole;
   }
 
   @override
@@ -79,7 +87,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final mode = appModeFromRoute(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('История поездок')),
+      appBar: AppBar(title: Text(AppLocalizations.of(context).historyTitle)),
       drawer: AppDrawer(mode: mode),
       body: FutureBuilder<List<Map<String, dynamic>>>(
         future: _historyFuture,
@@ -101,14 +109,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       color: Colors.grey,
                     ),
                     const SizedBox(height: 12),
-                    const Text(
-                      'Не удалось загрузить историю поездок.',
+                    Text(
+                      AppLocalizations.of(context).historyLoadFailed,
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 16),
                     ElevatedButton(
                       onPressed: _refresh,
-                      child: const Text('Повторить'),
+                      child: Text(AppLocalizations.of(context).retry),
                     ),
                   ],
                 ),
@@ -123,11 +131,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
               onRefresh: _refresh,
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                children: const [
-                  SizedBox(height: 180),
-                  Icon(Icons.history, size: 56, color: Colors.grey),
-                  SizedBox(height: 12),
-                  Center(child: Text('У вас пока нет завершённых поездок')),
+                children: [
+                  const SizedBox(height: 180),
+                  const Icon(Icons.history, size: 56, color: Colors.grey),
+                  const SizedBox(height: 12),
+                  Center(
+                    child: Text(AppLocalizations.of(context).historyEmpty),
+                  ),
                 ],
               ),
             );
@@ -148,12 +158,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   order['serviceType'],
                 );
 
-                final from = _address(
-                  order['fromAddress'] ?? order['pickupAddress'],
-                );
-                final to = _address(
-                  order['toAddress'] ?? order['destinationAddress'],
-                );
+                final from = _address(order, const [
+                  'fromAddress',
+                  'pickupAddress',
+                ]);
+                final to = _address(order, const [
+                  'toAddress',
+                  'destinationAddress',
+                ]);
                 final date = _dateText(order);
 
                 return Card(
@@ -173,7 +185,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                serviceType.title,
+                                serviceType.localizedTitle(
+                                  AppLocalizations.of(context),
+                                ),
                                 style: const TextStyle(
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -188,7 +202,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                               ),
                               const SizedBox(height: 7),
                               Text(
-                                '${_price(order)} ₸',
+                                AppLocalizations.of(
+                                  context,
+                                ).historyPrice(_price(order)),
                                 style: const TextStyle(
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -217,9 +233,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         const SizedBox(width: 8),
                         Text(
                           isCompleted
-                              ? 'Завершён'
+                              ? AppLocalizations.of(context).historyCompleted
                               : status == 'cancelled'
-                              ? 'Отменён'
+                              ? AppLocalizations.of(context).historyCancelled
                               : status,
                           style: TextStyle(
                             color: isCompleted ? Colors.green : Colors.red,

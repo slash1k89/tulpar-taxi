@@ -5,8 +5,9 @@ void pushDiagnostic(String message) {
   if (kDebugMode) debugPrint('[Push] $message');
 }
 
-String pushTokenSuffix(String token) =>
-    token.length > 6 ? token.substring(token.length - 6) : '<short-token>';
+void fcmRegistrationDiagnostic(String message) {
+  if (kDebugMode) debugPrint('[FCM] $message');
+}
 
 /// Serializes registration and account changes without touching auth semantics.
 class PushTokenRegistration {
@@ -100,11 +101,9 @@ class PushTokenRegistration {
       return;
     }
     if (token == null || token.isEmpty) throw StateError('Token unavailable');
-    pushDiagnostic(
-      'token available suffix=${pushTokenSuffix(token)} userId=$userId',
-    );
     if (_registeredOwner == userId && _registeredToken == token) return;
     // The backend derives the owner from auth, never from request body.
+    fcmRegistrationDiagnostic('token registration attempted');
     await register(token, userId);
     if (_disposed) return;
     if (userId != currentUserId()) {
@@ -114,9 +113,7 @@ class PushTokenRegistration {
     _registeredOwner = userId;
     _registeredToken = token;
     _retry?.cancel();
-    pushDiagnostic(
-      'token registration success userId=$userId suffix=${pushTokenSuffix(token)}',
-    );
+    fcmRegistrationDiagnostic('token registration succeeded');
   }
 
   void dispose() {

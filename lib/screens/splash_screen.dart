@@ -8,7 +8,10 @@ import '../services/splash_startup_service.dart';
 import '../services/startup_diagnostics.dart';
 import '../services/user_profile_recovery_service.dart';
 import '../services/tulpar_auth_session.dart';
+import '../services/active_intercity_trip_service.dart';
+import '../services/terms_acceptance_service.dart';
 import 'auth/login_screen.dart';
+import 'driver/active_intercity_trip_screen.dart';
 import 'auth/user_profile_recovery_screen.dart';
 import 'driver/driver_map_screen.dart';
 import 'map/map_screen.dart';
@@ -73,6 +76,9 @@ class _SplashScreenState extends State<SplashScreen> {
 
       final hasTulparSession = await TulparAuthController.instance.restore();
       if (hasTulparSession) {
+        if (!mounted || _hasNavigated) return;
+        if (!await TermsAcceptanceService().ensureAccepted(context)) return;
+        if (!mounted || _hasNavigated) return;
         _replace(const _FastStartupGate(), 'fastAppGate');
         return;
       }
@@ -83,6 +89,10 @@ class _SplashScreenState extends State<SplashScreen> {
         _replace(const LoginScreen(), 'login');
         return;
       }
+
+      if (!mounted || _hasNavigated) return;
+      if (!await TermsAcceptanceService().ensureAccepted(context)) return;
+      if (!mounted || _hasNavigated) return;
 
       // ??????????? ?????????:
       // ?? ???? Firestore profile recovery ? VPS active-order lookup.
@@ -140,7 +150,7 @@ class _SplashScreenState extends State<SplashScreen> {
     final error = _startupError;
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: Colors.white,
       body: SafeArea(
         child: Center(
           child: Padding(
@@ -149,9 +159,9 @@ class _SplashScreenState extends State<SplashScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Image.asset(
-                  'assets/logo.png',
-                  width: 170,
-                  height: 170,
+                  'assets/meken_logo_transparent.png',
+                  width: 280,
+                  height: 110,
                   fit: BoxFit.contain,
                 ),
                 const SizedBox(height: 24),
@@ -161,7 +171,7 @@ class _SplashScreenState extends State<SplashScreen> {
                     height: 24,
                     child: CircularProgressIndicator(
                       strokeWidth: 2.5,
-                      color: Colors.amber,
+                      color: Color(0xFF0757A5),
                     ),
                   )
                 else ...[
@@ -169,7 +179,7 @@ class _SplashScreenState extends State<SplashScreen> {
                     'Не удалось запустить приложение',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: Colors.white,
+                      color: Colors.black87,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -179,7 +189,7 @@ class _SplashScreenState extends State<SplashScreen> {
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white60, fontSize: 12),
+                    style: const TextStyle(color: Colors.black54, fontSize: 12),
                   ),
                   const SizedBox(height: 16),
                   FilledButton(
@@ -192,8 +202,8 @@ class _SplashScreenState extends State<SplashScreen> {
                       unawaited(_startStartup());
                     },
                     style: FilledButton.styleFrom(
-                      backgroundColor: Colors.amber,
-                      foregroundColor: Colors.black,
+                      backgroundColor: Color(0xFF0757A5),
+                      foregroundColor: Colors.white,
                     ),
                     child: const Text('Повторить'),
                   ),
@@ -236,22 +246,26 @@ class _FastStartupGateState extends State<_FastStartupGate> {
     try {
       if (TulparAuthController.instance.hasSession) {
         final activeOrder = await ActiveOrderService().findCurrentOrder();
-        if (!mounted || _handled || activeOrder == null) return;
-        _handled = true;
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => activeOrder.isDriver
-                ? DriverMapScreen(
-                    orderId: activeOrder.orderId,
-                    orderData: activeOrder.data,
-                  )
-                : OrderTrackingScreen(
-                    orderId: activeOrder.orderId,
-                    initialOrderData: activeOrder.data,
-                  ),
-          ),
-        );
+        if (!mounted || _handled) return;
+        if (activeOrder != null) {
+          _handled = true;
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => activeOrder.isDriver
+                  ? DriverMapScreen(
+                      orderId: activeOrder.orderId,
+                      orderData: activeOrder.data,
+                    )
+                  : OrderTrackingScreen(
+                      orderId: activeOrder.orderId,
+                      initialOrderData: activeOrder.data,
+                    ),
+            ),
+          );
+          return;
+        }
+        await _restoreActiveIntercityTrip();
         return;
       }
       final recoveryFuture = UserProfileRecoveryService().inspectAndRepair();
@@ -281,7 +295,12 @@ class _FastStartupGateState extends State<_FastStartupGate> {
 
       StartupDiagnostics.mark('background active order resolved');
 
-      if (!mounted || _handled || activeOrder == null) return;
+      if (!mounted || _handled) return;
+
+      if (activeOrder == null) {
+        await _restoreActiveIntercityTrip();
+        return;
+      }
 
       _handled = true;
 
@@ -312,6 +331,18 @@ class _FastStartupGateState extends State<_FastStartupGate> {
 
       debugPrintStack(stackTrace: stackTrace);
     }
+  }
+
+  Future<void> _restoreActiveIntercityTrip() async {
+    final result = await ActiveIntercityTripResolver().resolve();
+    if (!mounted || _handled) return;
+    final trip = result.trip;
+    if (trip == null) return;
+    _handled = true;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => ActiveIntercityTripScreen(trip: trip)),
+    );
   }
 
   @override

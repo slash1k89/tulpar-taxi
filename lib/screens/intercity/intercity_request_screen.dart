@@ -7,6 +7,7 @@ import '../../models/order_service_type.dart';
 import '../../services/city_service.dart';
 import '../../services/geocoding_service.dart';
 import '../../services/intercity_ride_service.dart';
+import '../../services/address_label_service.dart';
 import '../../services/tulpar_api_client.dart';
 import '../../utils/intercity_ride_formatters.dart';
 import '../../widgets/app_drawer.dart';
@@ -14,6 +15,7 @@ import '../../widgets/intercity_ride_fields.dart';
 import '../../widgets/intercity_pickup_field.dart';
 import '../../widgets/tulpar_date_picker.dart';
 import 'intercity_ride_details_screen.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 class IntercityRequestScreen extends StatefulWidget {
   const IntercityRequestScreen({
@@ -91,7 +93,9 @@ class _IntercityRequestScreenState extends State<IntercityRequestScreen> {
     final origin = _origin;
     if (origin == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Сначала выберите город отправления.')),
+        SnackBar(
+          content: Text(AppLocalizations.of(context).requestSelectOriginFirst),
+        ),
       );
       return;
     }
@@ -164,20 +168,21 @@ class _IntercityRequestScreenState extends State<IntercityRequestScreen> {
 
   Future<void> _create() async {
     if (_creating) return;
+    final l10n = AppLocalizations.of(context);
     final origin = _origin;
     final destination = _destination;
     final today = DateUtils.dateOnly(DateTime.now());
     String? validation;
     if (origin == null || destination == null) {
-      validation = 'Выберите города отправления и назначения.';
+      validation = l10n.intercityChooseCities;
     } else if (_cityKey(origin.name) == _cityKey(destination.name)) {
-      validation = 'Города отправления и назначения должны отличаться.';
+      validation = l10n.intercityDifferentCities;
     } else if (!_travelDate.isAfter(today)) {
-      validation = 'Заявку можно оставить только на будущую дату.';
+      validation = l10n.requestFutureDate;
     } else if (_passengerCommentController.text.trim().length > 1000) {
-      validation = 'Комментарий не должен превышать 1000 символов.';
+      validation = l10n.requestCommentTooLong;
     } else if (_submissionPickup == null) {
-      validation = 'Выберите точку посадки.';
+      validation = l10n.requestSelectPickup;
     }
     if (validation != null) {
       ScaffoldMessenger.of(
@@ -198,12 +203,12 @@ class _IntercityRequestScreenState extends State<IntercityRequestScreen> {
       setState(() => _requests = [created, ..._requests]);
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Заявка сохранена')));
+      ).showSnackBar(SnackBar(content: Text(l10n.requestSaved)));
     } catch (error) {
       if (!mounted) return;
       final message = error is TulparApiException && error.statusCode == 409
-          ? 'Такая активная заявка уже существует.'
-          : 'Не удалось сохранить заявку. Попробуйте ещё раз.';
+          ? l10n.requestDuplicate
+          : l10n.requestSaveFailed;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
@@ -214,19 +219,20 @@ class _IntercityRequestScreenState extends State<IntercityRequestScreen> {
 
   Future<void> _cancel(IntercityRideRequest request) async {
     if (_cancelling.contains(request.requestId)) return;
+    final l10n = AppLocalizations.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Отменить заявку?'),
+        title: Text(l10n.requestCancelTitle),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Назад'),
+            child: Text(l10n.bookingBack),
           ),
           ElevatedButton(
             key: const Key('intercity_cancel_request_confirm'),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Отменить'),
+            child: Text(l10n.cancel),
           ),
         ],
       ),
@@ -243,11 +249,9 @@ class _IntercityRequestScreenState extends State<IntercityRequestScreen> {
       });
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Не удалось отменить заявку. Попробуйте ещё раз.'),
-          ),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(l10n.requestCancelFailed)));
       }
     } finally {
       if (mounted) setState(() => _cancelling.remove(request.requestId));
@@ -256,7 +260,9 @@ class _IntercityRequestScreenState extends State<IntercityRequestScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Ищу попутку')),
+    appBar: AppBar(
+      title: Text(AppLocalizations.of(context).intercityLookingForRide),
+    ),
     drawer: const AppDrawer(
       mode: AppMode.passenger,
       selectedServiceType: OrderServiceType.intercity,
@@ -268,26 +274,26 @@ class _IntercityRequestScreenState extends State<IntercityRequestScreen> {
           padding: const EdgeInsets.all(16),
           children: [
             Text(
-              'Оставить заявку',
+              AppLocalizations.of(context).intercityLeaveRequest,
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 4),
             Text(
-              'Сообщим, когда появится подходящая поездка.',
+              AppLocalizations.of(context).requestNotifyHint,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 16),
             IntercityCitySelectionField(
-              label: 'Откуда',
+              label: AppLocalizations.of(context).intercityFrom,
               value: _origin,
               onChanged: _setOrigin,
               pickerBuilder: widget.originCityPickerBuilder,
             ),
             const SizedBox(height: 12),
             IntercityCitySelectionField(
-              label: 'Куда',
+              label: AppLocalizations.of(context).intercityTo,
               value: _destination,
               onChanged: (value) => setState(() => _destination = value),
               pickerBuilder: widget.destinationCityPickerBuilder,
@@ -297,9 +303,9 @@ class _IntercityRequestScreenState extends State<IntercityRequestScreen> {
               key: const Key('intercity_request_date'),
               onTap: _selectDate,
               child: InputDecorator(
-                decoration: const InputDecoration(
-                  labelText: 'Дата поездки',
-                  prefixIcon: Icon(Icons.calendar_month_outlined),
+                decoration: InputDecoration(
+                  labelText: AppLocalizations.of(context).intercityTravelDate,
+                  prefixIcon: const Icon(Icons.calendar_month_outlined),
                 ),
                 child: Text(formatIntercityCalendarDate(_travelDate)),
               ),
@@ -322,10 +328,10 @@ class _IntercityRequestScreenState extends State<IntercityRequestScreen> {
               enabled: !_creating,
               maxLength: 1000,
               maxLines: 3,
-              decoration: const InputDecoration(
-                labelText: 'Комментарий водителю (необязательно)',
-                hintText: 'Например, подъедьте к главному входу',
-                prefixIcon: Icon(Icons.notes_outlined),
+              decoration: InputDecoration(
+                labelText: AppLocalizations.of(context).requestCommentLabel,
+                hintText: AppLocalizations.of(context).requestCommentHint,
+                prefixIcon: const Icon(Icons.notes_outlined),
               ),
             ),
             const SizedBox(height: 4),
@@ -339,11 +345,14 @@ class _IntercityRequestScreenState extends State<IntercityRequestScreen> {
                         dimension: 20,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text('Оставить заявку'),
+                    : Text(AppLocalizations.of(context).intercityLeaveRequest),
               ),
             ),
             const Divider(height: 40),
-            Text('Мои заявки', style: Theme.of(context).textTheme.titleLarge),
+            Text(
+              AppLocalizations.of(context).requestMyRequests,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
             const SizedBox(height: 12),
             if (_loading)
               const Center(child: CircularProgressIndicator())
@@ -352,16 +361,16 @@ class _IntercityRequestScreenState extends State<IntercityRequestScreen> {
                 key: const Key('intercity_requests_error'),
                 child: Column(
                   children: [
-                    const Text('Не удалось загрузить заявки'),
+                    Text(AppLocalizations.of(context).requestLoadFailed),
                     TextButton(
                       onPressed: _loadRequests,
-                      child: const Text('Повторить'),
+                      child: Text(AppLocalizations.of(context).retry),
                     ),
                   ],
                 ),
               )
             else if (_requests.isEmpty)
-              const Text('Активных заявок пока нет')
+              Text(AppLocalizations.of(context).requestEmpty)
             else
               for (final request in _requests)
                 Padding(
@@ -420,19 +429,32 @@ class _RequestCard extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            '${formatIntercityRideDate(request.travelDate)} · '
-            '${request.seats} мест',
+            AppLocalizations.of(context).requestDateSeats(
+              formatIntercityRideDate(request.travelDate),
+              request.seats,
+            ),
           ),
-          Text(_requestStatus(request.status)),
+          Text(_requestStatus(request.status, AppLocalizations.of(context))),
           if (request.pickupAddress?.isNotEmpty == true) ...[
             const SizedBox(height: 6),
-            Text('Точка посадки: ${request.pickupAddress}'),
+            Text(
+              AppLocalizations.of(context).bookingPickup(
+                AddressLabelService.format(
+                  request.pickupAddress!,
+                  Localizations.localeOf(context),
+                ),
+              ),
+            ),
           ],
           if (request.passengerComment?.isNotEmpty == true)
-            Text('Комментарий водителю: ${request.passengerComment}'),
+            Text(
+              AppLocalizations.of(
+                context,
+              ).bookingComment(request.passengerComment!),
+            ),
           if (request.matchedRideIds.isNotEmpty) ...[
             const SizedBox(height: 10),
-            const Text('Найдены поездки:'),
+            Text(AppLocalizations.of(context).requestMatchedRides),
             Wrap(
               spacing: 8,
               children: [
@@ -445,7 +467,11 @@ class _RequestCard extends StatelessWidget {
                     key: Key(
                       'intercity_matched_ride_${request.matchedRideIds[index]}',
                     ),
-                    label: Text('Поездка ${index + 1}'),
+                    label: Text(
+                      AppLocalizations.of(
+                        context,
+                      ).requestMatchedRide(index + 1),
+                    ),
                     onPressed: () => onRide(request.matchedRideIds[index]),
                   ),
               ],
@@ -461,7 +487,7 @@ class _RequestCard extends StatelessWidget {
                       dimension: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Text('Отменить заявку'),
+                  : Text(AppLocalizations.of(context).requestCancel),
             ),
           ],
         ],
@@ -470,11 +496,14 @@ class _RequestCard extends StatelessWidget {
   );
 }
 
-String _requestStatus(IntercityRideRequestStatus status) => switch (status) {
-  IntercityRideRequestStatus.active => 'Активна',
-  IntercityRideRequestStatus.cancelled => 'Отменена',
-  IntercityRideRequestStatus.expired => 'Истекла',
-  IntercityRideRequestStatus.unknown => 'Статус неизвестен',
+String _requestStatus(
+  IntercityRideRequestStatus status,
+  AppLocalizations l10n,
+) => switch (status) {
+  IntercityRideRequestStatus.active => l10n.requestActive,
+  IntercityRideRequestStatus.cancelled => l10n.requestCancelled,
+  IntercityRideRequestStatus.expired => l10n.requestExpired,
+  IntercityRideRequestStatus.unknown => l10n.driverRideUnknown,
 };
 
 String _cityKey(String value) => value

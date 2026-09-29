@@ -79,7 +79,7 @@ test('all endpoints require auth', async () => {
   assert.equal(response.status, 401);
 });
 
-test('active exempt or paid driver can create a ride without private identifier leakage', async () => {
+test('approved driver can create a ride for free without private identifier leakage', async () => {
   const pool = createPool(); const response = await request(appWith(pool)).post('/api/intercity-rides').send(valid);
   assert.equal(response.status, 201); assert.equal(response.body.ride.rideId, rideId);
   assert.equal(response.body.matchedRequestCount, 0);
@@ -88,11 +88,10 @@ test('active exempt or paid driver can create a ride without private identifier 
   assert.equal(JSON.stringify(response.body).includes('driver-db-id'), false);
   const accessQuery = pool.calls.find((call) =>
     call.sql.includes('FROM users u') && call.sql.includes('JOIN driver_profiles'));
-  assert.match(accessQuery.sql, /payment_status = 'paid'/);
-  assert.match(accessQuery.sql, /valid_until > now\(\)/);
+  assert.doesNotMatch(accessQuery.sql, /driver_subscriptions/);
 });
 
-for (const [name, options] of [['pending driver', { accessStatus: 'pending' }], ['suspended driver', { accessStatus: 'suspended' }], ['expired subscription', { hasAccess: false }], ['missing profile', { access: false }]]) {
+for (const [name, options] of [['pending driver', { accessStatus: 'pending' }], ['suspended driver', { accessStatus: 'suspended' }], ['missing profile', { access: false }]]) {
   test(`${name} cannot create`, async () => assert.equal((await request(appWith(createPool(options))).post('/api/intercity-rides').send(valid)).status, 403));
 }
 

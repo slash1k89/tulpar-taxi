@@ -11,6 +11,7 @@ import 'package:taxi_esil/screens/map/destination_picker_screen.dart';
 import 'package:taxi_esil/screens/map/map_screen.dart';
 import 'package:taxi_esil/services/map_point_address_resolver.dart';
 import 'package:taxi_esil/services/order_creation_service.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -20,14 +21,17 @@ void main() {
   testWidgets('GPS coordinates resolve to the pickup address field', (
     tester,
   ) async {
-    SharedPreferences.setMockInitialValues({'selected_city_id': 'astana'});
-    const gpsPoint = LatLng(51.1605, 71.4305);
+    SharedPreferences.setMockInitialValues({'selected_city_id': 'esil'});
+    const gpsPoint = LatLng(51.96, 66.4);
     final resolver = MapPointAddressResolver(
       reverseGeocode: (lat, lng) async => 'Проспект Республики, 10/1',
     );
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: MapScreen(
           orderCreationService: OrderCreationService(gateway: _NoopGateway()),
           addressResolver: resolver,
@@ -134,6 +138,15 @@ void main() {
     expect(find.text('Точный адрес доставки'), findsOneWidget);
     expect(
       find.byKey(const Key('delivery_destination_apartment_field')),
+      findsNothing,
+    );
+    await tester.ensureVisible(
+      find.byKey(const Key('delivery_additional_toggle')),
+    );
+    await tester.tap(find.byKey(const Key('delivery_additional_toggle')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('delivery_destination_apartment_field')),
       findsOneWidget,
     );
   });
@@ -156,6 +169,9 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: MapPointPickerScreen(
           initialCenter: const LatLng(51.9570, 66.4040),
           initialAddress: 'Есиль',
@@ -179,6 +195,9 @@ void main() {
     var calls = 0;
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: MapPointPickerScreen(
           initialCenter: const LatLng(51.957, 66.404),
           initialAddress: 'ул. Абая, 1',
@@ -213,6 +232,9 @@ void main() {
     final never = Completer<String>();
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: MapPointPickerScreen(
           initialCenter: const LatLng(51.957, 66.404),
           purpose: MapPointPurpose.pickup,
@@ -238,6 +260,9 @@ void main() {
     final never = Completer<LatLng?>();
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: MapPointPickerScreen(
           initialCenter: const LatLng(51.957, 66.404),
           initialAddress: 'Есиль',
@@ -258,6 +283,9 @@ void main() {
   ) async {
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: MapPointPickerScreen(
           initialCenter: const LatLng(51.957, 66.404),
           initialAddress: 'Есиль',
@@ -277,6 +305,9 @@ void main() {
     final never = Completer<String>();
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: MapPointPickerScreen(
           initialCenter: const LatLng(51.957, 66.404),
           purpose: MapPointPurpose.pickup,
@@ -305,6 +336,9 @@ Future<void> _pumpMap(
   );
   await tester.pumpWidget(
     MaterialApp(
+      locale: const Locale('ru'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: MapScreen(
         serviceType: serviceType,
         orderCreationService: OrderCreationService(gateway: _NoopGateway()),

@@ -8,6 +8,7 @@ import {
   apiErrorHandler,
   configureTrustProxy,
   createApiRateLimiter,
+  createChatSendRateLimiter,
   createCorsMiddleware,
   createHelmetMiddleware,
   createJsonBodyParser,
@@ -379,6 +380,63 @@ test('/api/push/test is limited by authenticated UID', async () => {
     (await request(app).post('/api/push/test').set('X-Test-Uid', 'user-b')).status,
     200,
   );
+});
+
+test('chat send limiter allows normal bursts and never blocks chat reads', async () => {
+  const app = express();
+  const general = createApiRateLimiter({ windowMs: 60_000, limit: 1 });
+  const sendLimiter = createChatSendRateLimiter({ windowMs: 60_000, limit: 10 });
+  const fakeAuth = (req, _res, next) => {
+    req.user = { uid: 'driver-a' };
+    next();
+  };
+  app.use('/api', general);
+  app.get('/api/orders/:orderId/messages', fakeAuth, (_req, res) => {
+    res.json({ messages: [] });
+  });
+  app.get('/api/orders/:orderId/messages/unread', fakeAuth, (_req, res) => {
+    res.json({ unreadCount: 0 });
+  });
+  app.post('/api/orders/:orderId/messages', fakeAuth, sendLimiter, (_req, res) => {
+    res.status(201).json({ sent: true });
+  });
+
+  for (let index = 0; index < 10; index += 1) {
+    assert.equal(
+      (await request(app).post('/api/orders/order-a/messages')).status,
+      201,
+    );
+  }
+  const limited = await request(app).post('/api/orders/order-a/messages');
+  assert.equal(limited.status, 429);
+  assert.equal(limited.body.error, 'chat_rate_limited');
+  assert.ok(limited.body.retryAfterSeconds >= 1);
+  assert.equal(
+    (await request(app).get('/api/orders/order-a/messages')).status,
+    200,
+  );
+  assert.equal(
+    (await request(app).get('/api/orders/order-a/messages/unread')).status,
+    200,
+  );
+  assert.equal((await request(app).get('/api/ping')).status, 404);
+});
+
+test('chat send limiter is scoped by user and order', async () => {
+  const app = express();
+  const limiter = createChatSendRateLimiter({ windowMs: 60_000, limit: 1 });
+  const fakeAuth = (req, _res, next) => {
+    req.user = { uid: req.get('X-Test-Uid') };
+    next();
+  };
+  app.post('/api/orders/:orderId/messages', fakeAuth, limiter, (_req, res) => {
+    res.status(201).json({ sent: true });
+  });
+
+  assert.equal((await request(app).post('/api/orders/a/messages').set('X-Test-Uid', 'u1')).status, 201);
+  assert.equal((await request(app).post('/api/orders/a/messages').set('X-Test-Uid', 'u1')).status, 429);
+  assert.equal((await request(app).post('/api/orders/b/messages').set('X-Test-Uid', 'u1')).status, 201);
+  assert.equal((await request(app).post('/api/orders/a/messages').set('X-Test-Uid', 'u2')).status, 201);
 });
 
 test('verified Firebase phone wins over a conflicting body phone', () => {

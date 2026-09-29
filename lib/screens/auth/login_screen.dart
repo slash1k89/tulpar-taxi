@@ -4,25 +4,30 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../services/active_order_service.dart';
-import '../../services/tulpar_api_client.dart';
 import '../../services/tulpar_auth_session.dart';
+import '../../services/terms_acceptance_service.dart';
+import '../../services/locale_controller.dart';
+import '../../l10n/generated/app_localizations.dart';
+import '../legal/about_support_screen.dart';
 import '../../utils/formatters.dart';
 import '../driver/driver_map_screen.dart';
 import '../map/map_screen.dart';
 import '../map/order_tracking_screen.dart';
 
-enum _LoginStep { phone, code, profile }
+enum _LoginStep { login, verificationPhone, code, password }
+
+enum _PasswordPurpose { setup, reset }
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({
     super.key,
     this.authController,
-    this.apiClient,
+    this.localeController,
     this.activeOrderLoader,
   });
 
   final TulparAuthController? authController;
-  final TulparApiClient? apiClient;
+  final LocaleController? localeController;
   final Future<ActiveOrder?> Function()? activeOrderLoader;
 
   @override
@@ -32,11 +37,15 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _phoneController = TextEditingController();
   final _codeController = TextEditingController();
-  final _nameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
   late final TulparAuthController _auth;
-  late final TulparApiClient _apiClient;
-  _LoginStep _step = _LoginStep.phone;
+  LocaleController get _language =>
+      widget.localeController ?? appLocaleController;
+  _LoginStep _step = _LoginStep.login;
+  _PasswordPurpose? _purpose;
   String? _challengeId;
+  String? _verificationToken;
   String? _phone;
   bool _isLoading = false;
   int _resendSeconds = 0;
@@ -46,7 +55,6 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
     _auth = widget.authController ?? TulparAuthController.instance;
-    _apiClient = widget.apiClient ?? TulparApiClient(tulparAuth: _auth);
   }
 
   @override
@@ -54,18 +62,70 @@ class _LoginScreenState extends State<LoginScreen> {
     _resendTimer?.cancel();
     _phoneController.dispose();
     _codeController.dispose();
-    _nameController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
     super.dispose();
+  }
+
+  void _beginVerification(_PasswordPurpose purpose) {
+    if (_isLoading) return;
+    setState(() {
+      _purpose = purpose;
+      _step = _LoginStep.verificationPhone;
+      _challengeId = null;
+      _verificationToken = null;
+      _codeController.clear();
+      _passwordController.clear();
+      _confirmPasswordController.clear();
+    });
+  }
+
+  void _backToLogin() {
+    _resendTimer?.cancel();
+    setState(() {
+      _step = _LoginStep.login;
+      _purpose = null;
+      _challengeId = null;
+      _verificationToken = null;
+      _resendSeconds = 0;
+      _codeController.clear();
+      _passwordController.clear();
+      _confirmPasswordController.clear();
+    });
+  }
+
+  Future<void> _login() async {
+    final l10n = AppLocalizations.of(context);
+    if (!isCompleteRuPhone(_phoneController.text)) {
+      _showError(l10n.invalidPhone);
+      return;
+    }
+    if (_passwordController.text.isEmpty) {
+      _showError(l10n.enterPassword);
+      return;
+    }
+    await _run(() async {
+      await _auth.loginWithPassword(
+        phone: normalizeRuPhone(_phoneController.text),
+        password: _passwordController.text,
+      );
+      if (!mounted) return;
+      unawaited(_language.syncIfAuthenticated());
+      await _continueToApp();
+    });
   }
 
   Future<void> _requestCode() async {
     if (!isCompleteRuPhone(_phoneController.text)) {
-      _showError('Введите корректный номер телефона.');
+      _showError(AppLocalizations.of(context).invalidPhone);
       return;
     }
     final phone = normalizeRuPhone(_phoneController.text);
     await _run(() async {
-      final challenge = await _auth.requestFlashCall(phone: phone);
+      final challenge = await _auth.requestFlashCall(
+        phone: phone,
+        purpose: _purpose!.name,
+      );
       if (!mounted) return;
       setState(() {
         _phone = phone;
@@ -81,37 +141,51 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _verifyCode() async {
     final code = _codeController.text.trim();
     if (!RegExp(r'^\d{4}$').hasMatch(code)) {
-      _showError('Введите последние 4 цифры номера звонящего.');
+      _showError(AppLocalizations.of(context).invalidCode);
       return;
     }
     await _run(() async {
-      final result = await _auth.verifyFlashCall(
+      final result = await _auth.verifyPasswordFlashCall(
         challengeId: _challengeId!,
         phone: _phone!,
         code: code,
+        purpose: _purpose!.name,
       );
       if (!mounted) return;
-      if (result.profileRequired) {
-        setState(() => _step = _LoginStep.profile);
-        return;
-      }
-      await _continueToApp();
+      setState(() {
+        _verificationToken = result.verificationToken;
+        _step = _LoginStep.password;
+      });
     });
   }
 
-  Future<void> _completeProfile() async {
-    final name = _nameController.text.trim();
-    if (name.length < 2 || name.length > 120) {
-      _showError('Введите имя длиной от 2 до 120 символов.');
+  Future<void> _setPassword() async {
+    final l10n = AppLocalizations.of(context);
+    final password = _passwordController.text;
+    if (password.length < 8 || password.length > 128) {
+      _showError(l10n.authPasswordTooShort);
+      return;
+    }
+    if (password != _confirmPasswordController.text) {
+      _showError(l10n.passwordMismatch);
       return;
     }
     await _run(() async {
-      await _apiClient.updateCurrentUserProfile(name: name);
+      await _auth.setVerifiedPassword(
+        verificationToken: _verificationToken!,
+        password: password,
+        purpose: _purpose!.name,
+      );
+      if (!mounted) return;
+      unawaited(_language.syncIfAuthenticated());
       await _continueToApp();
     });
   }
 
   Future<void> _continueToApp() async {
+    if (!await TermsAcceptanceService().ensureAccepted(context) || !mounted) {
+      return;
+    }
     final activeOrder =
         await (widget.activeOrderLoader?.call() ??
             ActiveOrderService().findCurrentOrder());
@@ -144,18 +218,21 @@ class _LoginScreenState extends State<LoginScreen> {
       await action();
     } on TulparAuthException catch (error) {
       if (!mounted) return;
+      final l10n = AppLocalizations.of(context);
       _showError(switch (error.code) {
-        'resend_cooldown' => 'Повторный звонок пока недоступен.',
-        'invalid_phone' => 'Проверьте номер телефона.',
-        'invalid_verification' => 'Неверный или просроченный код.',
-        _ => 'Не удалось выполнить вход. Попробуйте ещё раз.',
+        'resend_cooldown' => l10n.resendCooldown,
+        'invalid_phone' => l10n.checkPhone,
+        'invalid_verification' => l10n.invalidVerification,
+        'invalid_credentials' => l10n.authInvalidCredentials,
+        'invalid_password' => l10n.authPasswordTooShort,
+        'password_already_set' => l10n.authPasswordAlreadySet,
+        'verification_required' => l10n.authVerificationRequired,
+        _ => l10n.loginFailed,
       });
-    } on TulparApiException catch (error) {
-      if (mounted) _showError(error.message);
     } on TimeoutException {
-      if (mounted) _showError('Сервер не ответил. Попробуйте ещё раз.');
+      if (mounted) _showError(AppLocalizations.of(context).serverTimeout);
     } catch (_) {
-      if (mounted) _showError('Не удалось выполнить вход. Попробуйте ещё раз.');
+      if (mounted) _showError(AppLocalizations.of(context).loginFailed);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -182,92 +259,207 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
     return Scaffold(
       backgroundColor: colors.surface,
       body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 440),
-              child: Column(
-                children: [
-                  Image.asset(
-                    'assets/logo.png',
-                    height: 210,
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, _, _) => Icon(
-                      Icons.local_taxi,
-                      size: 110,
-                      color: colors.primary,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  Text(switch (_step) {
-                    _LoginStep.phone => 'Вход в Tulpar',
-                    _LoginStep.code => 'Подтверждение номера',
-                    _LoginStep.profile => 'Как к вам обращаться?',
-                  }, style: Theme.of(context).textTheme.headlineSmall),
-                  const SizedBox(height: 12),
-                  Text(
-                    switch (_step) {
-                      _LoginStep.phone =>
-                        'На ваш номер поступит короткий звонок.\nВведите последние 4 цифры номера звонящего.',
-                      _LoginStep.code =>
-                        'Введите последние 4 цифры номера входящего звонка',
-                      _LoginStep.profile =>
-                        'Имя будет отображаться в вашем профиле.',
-                    },
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: colors.onSurfaceVariant),
-                  ),
-                  const SizedBox(height: 28),
-                  if (_step == _LoginStep.phone) _phoneField(colors),
-                  if (_step == _LoginStep.code) _codeField(colors),
-                  if (_step == _LoginStep.profile) _nameField(colors),
-                  const SizedBox(height: 22),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: FilledButton(
-                      key: const Key('flash_call_primary_button'),
-                      onPressed: _isLoading
-                          ? null
-                          : switch (_step) {
-                              _LoginStep.phone => _requestCode,
-                              _LoginStep.code => _verifyCode,
-                              _LoginStep.profile => _completeProfile,
-                            },
-                      child: _isLoading
-                          ? const SizedBox.square(
-                              dimension: 22,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : Text(switch (_step) {
-                              _LoginStep.phone => 'Получить код звонком',
-                              _LoginStep.code => 'Подтвердить',
-                              _LoginStep.profile => 'Продолжить',
-                            }),
-                    ),
-                  ),
-                  if (_step == _LoginStep.code) ...[
-                    const SizedBox(height: 10),
-                    TextButton(
-                      key: const Key('flash_call_resend_button'),
-                      onPressed: _isLoading || _resendSeconds > 0
-                          ? null
-                          : _requestCode,
-                      child: Text(
-                        _resendSeconds > 0
-                            ? 'Позвонить ещё раз через $_resendSeconds сек.'
-                            : 'Позвонить ещё раз',
+        child: Stack(
+          children: [
+            Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24, 36, 24, 16),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 440),
+                  child: Column(
+                    children: [
+                      Image.asset(
+                        'assets/meken_logo_transparent.png',
+                        height: 108,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, _, _) => Icon(
+                          Icons.local_taxi,
+                          size: 110,
+                          color: colors.primary,
+                        ),
                       ),
-                    ),
-                  ],
-                ],
+                      const SizedBox(height: 16),
+                      Text(switch (_step) {
+                        _LoginStep.login => l10n.loginTitle,
+                        _LoginStep.verificationPhone =>
+                          _purpose == _PasswordPurpose.setup
+                              ? l10n.registerTitle
+                              : l10n.authResetPasswordTitle,
+                        _LoginStep.code => l10n.verificationTitle,
+                        _LoginStep.password =>
+                          _purpose == _PasswordPurpose.setup
+                              ? l10n.authCreatePasswordTitle
+                              : l10n.authResetPasswordTitle,
+                      }, style: Theme.of(context).textTheme.headlineSmall),
+                      if (_step == _LoginStep.login)
+                        const SizedBox(height: 24)
+                      else ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          switch (_step) {
+                            _LoginStep.verificationPhone =>
+                              l10n.authVerificationPhoneHint,
+                            _LoginStep.code => l10n.codeHint,
+                            _LoginStep.password => l10n.passwordLabel,
+                            _LoginStep.login => '',
+                          },
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: colors.onSurfaceVariant),
+                        ),
+                        const SizedBox(height: 28),
+                      ],
+                      if (_step == _LoginStep.login ||
+                          _step == _LoginStep.verificationPhone)
+                        _phoneField(colors),
+                      if (_step == _LoginStep.code) _codeField(colors),
+                      if (_step == _LoginStep.login ||
+                          _step == _LoginStep.password)
+                        _passwordField(colors),
+                      if (_step == _LoginStep.password) ...[
+                        const SizedBox(height: 14),
+                        _confirmPasswordField(colors),
+                      ],
+                      const SizedBox(height: 22),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 52,
+                        child: FilledButton(
+                          key: const Key('auth_primary_button'),
+                          onPressed: _isLoading
+                              ? null
+                              : switch (_step) {
+                                  _LoginStep.login => _login,
+                                  _LoginStep.verificationPhone => _requestCode,
+                                  _LoginStep.code => _verifyCode,
+                                  _LoginStep.password => _setPassword,
+                                },
+                          child: _isLoading
+                              ? const SizedBox.square(
+                                  dimension: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : Text(switch (_step) {
+                                  _LoginStep.login => l10n.authSignIn,
+                                  _LoginStep.verificationPhone =>
+                                    l10n.requestCode,
+                                  _LoginStep.code => l10n.confirm,
+                                  _LoginStep.password => l10n.continueLabel,
+                                }),
+                        ),
+                      ),
+                      if (_step == _LoginStep.login) ...[
+                        TextButton(
+                          key: const Key('forgot_password_button'),
+                          onPressed: _isLoading
+                              ? null
+                              : () =>
+                                    _beginVerification(_PasswordPurpose.reset),
+                          child: Text(l10n.authForgotPassword),
+                        ),
+                        TextButton(
+                          key: const Key('register_button'),
+                          onPressed: _isLoading
+                              ? null
+                              : () =>
+                                    _beginVerification(_PasswordPurpose.setup),
+                          child: Text(l10n.registerButton),
+                        ),
+                        TextButton.icon(
+                          key: const Key('prelogin_legal_links'),
+                          onPressed: _isLoading
+                              ? null
+                              : () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) =>
+                                        const AboutSupportScreen(),
+                                  ),
+                                ),
+                          icon: const Icon(Icons.privacy_tip_outlined),
+                          label: Text(l10n.aboutSupportTitle),
+                        ),
+                      ] else if (_step != _LoginStep.login)
+                        TextButton(
+                          key: const Key('auth_back_to_login'),
+                          onPressed: _isLoading ? null : _backToLogin,
+                          child: Text(l10n.authBackToLogin),
+                        ),
+                      if (_step == _LoginStep.code) ...[
+                        const SizedBox(height: 10),
+                        TextButton(
+                          key: const Key('flash_call_resend_button'),
+                          onPressed: _isLoading || _resendSeconds > 0
+                              ? null
+                              : _requestCode,
+                          child: Text(
+                            _resendSeconds > 0
+                                ? l10n.resendIn(_resendSeconds)
+                                : l10n.resend,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
               ),
             ),
-          ),
+            Positioned(
+              top: 8,
+              right: 16,
+              child: PopupMenuButton<String>(
+                key: const Key('language_switcher'),
+                tooltip: l10n.chooseLanguage,
+                onSelected: (code) => unawaited(_language.choose(code)),
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    key: Key('language_option_ru'),
+                    value: 'ru',
+                    child: Text('Русский'),
+                  ),
+                  PopupMenuItem(
+                    key: Key('language_option_kk'),
+                    value: 'kk',
+                    child: Text('Қазақша'),
+                  ),
+                  PopupMenuItem(
+                    key: Key('language_option_en'),
+                    value: 'en',
+                    child: Text('English'),
+                  ),
+                ],
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colors.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: colors.outlineVariant),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.language, size: 18),
+                      const SizedBox(width: 6),
+                      Text(switch (Localizations.localeOf(
+                        context,
+                      ).languageCode) {
+                        'kk' => 'ҚАЗ',
+                        'en' => 'EN',
+                        _ => 'RU',
+                      }, style: const TextStyle(fontWeight: FontWeight.w700)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -282,14 +474,14 @@ class _LoginScreenState extends State<LoginScreen> {
     cursorColor: colors.primary,
     cursorErrorColor: colors.error,
     decoration: InputDecoration(
-      labelText: 'Номер телефона',
+      labelText: AppLocalizations.of(context).phoneNumber,
       labelStyle: TextStyle(color: colors.onSurfaceVariant),
       hintText: '+7 (700) 000-00-00',
       hintStyle: TextStyle(color: colors.onSurfaceVariant),
       errorStyle: TextStyle(color: colors.error),
       prefixIcon: Icon(Icons.phone_outlined, color: colors.primary),
     ),
-    onSubmitted: (_) => _requestCode(),
+    onSubmitted: (_) => _step == _LoginStep.login ? _login() : _requestCode(),
   );
 
   Widget _codeField(ColorScheme colors) => TextField(
@@ -308,24 +500,41 @@ class _LoginScreenState extends State<LoginScreen> {
       fontWeight: FontWeight.w600,
     ),
     cursorColor: colors.primary,
-    decoration: const InputDecoration(
-      labelText: 'Последние 4 цифры',
+    decoration: InputDecoration(
+      labelText: AppLocalizations.of(context).lastFourDigits,
       counterText: '',
     ),
     maxLength: 4,
     onSubmitted: (_) => _verifyCode(),
   );
 
-  Widget _nameField(ColorScheme colors) => TextField(
-    key: const Key('flash_call_profile_name_field'),
-    controller: _nameController,
-    textCapitalization: TextCapitalization.words,
+  Widget _passwordField(ColorScheme colors) => TextField(
+    key: Key(
+      _step == _LoginStep.login
+          ? 'login_password_field'
+          : 'register_password_field',
+    ),
+    controller: _passwordController,
+    obscureText: true,
     style: TextStyle(color: colors.onSurface),
     cursorColor: colors.primary,
-    decoration: const InputDecoration(
-      labelText: 'Имя',
-      prefixIcon: Icon(Icons.person_outline),
+    decoration: InputDecoration(
+      labelText: AppLocalizations.of(context).passwordLabel,
+      prefixIcon: const Icon(Icons.lock_outline),
     ),
-    onSubmitted: (_) => _completeProfile(),
+    onSubmitted: (_) => _step == _LoginStep.login ? _login() : _setPassword(),
+  );
+
+  Widget _confirmPasswordField(ColorScheme colors) => TextField(
+    key: const Key('register_confirm_password_field'),
+    controller: _confirmPasswordController,
+    obscureText: true,
+    style: TextStyle(color: colors.onSurface),
+    cursorColor: colors.primary,
+    decoration: InputDecoration(
+      labelText: AppLocalizations.of(context).confirmPassword,
+      prefixIcon: const Icon(Icons.lock_outline),
+    ),
+    onSubmitted: (_) => _setPassword(),
   );
 }

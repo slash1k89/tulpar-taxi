@@ -5,6 +5,8 @@ import {
   loadAccountLifecycleState,
 } from '../account-lifecycle.js';
 import { isSelfOrder } from '../security-policy.js';
+import { canCancelCityOrder, validateCityCancellationReason } from '../city-cancellation-policy.js';
+import { areUsersBlocked } from '../block-policy.js';
 import {
   expireStaleSearchingOrders,
   validateOrderCreatePayload,
@@ -41,9 +43,31 @@ export function createOrdersRouter({
   sendToUser,
   sendToAvailableDrivers,
   sendPushToUser,
+  requireCurrentTerms = (_req, _res, next) => next(),
 }) {
 
   const router = express.Router();
+
+  async function pushOrderEvent(orderId, recipient, type, extraData = {}) {
+    try {
+      const result = await pool.query(
+        `SELECT o.service_type,
+                COALESCE(u.firebase_uid, u.id::text) AS identity_key
+         FROM orders o
+         JOIN users u ON u.id = o.${recipient === 'driver' ? 'driver_id' : 'passenger_id'}
+         WHERE o.id = $1`,
+        [orderId],
+      );
+      const row = result.rows[0];
+      if (row?.identity_key) {
+        await sendPushToUser(row.identity_key, {
+          data: { type, orderId, serviceType: row.service_type, ...extraData },
+        });
+      }
+    } catch (pushError) {
+      console.error('[OrderLifecyclePush]', pushError);
+    }
+  }
 
   // Создание заказа пассажиром
   router.post('/', requireAuth, async (req, res) => {
@@ -123,56 +147,29 @@ export function createOrdersRouter({
 
       const passengerId = userResult.rows[0].id;
 
-      const settingsResult = await client.query(
-  `
-  SELECT
-    minimum_day_fare,
-    minimum_night_fare,
-    day_start_hour,
-    night_start_hour
-  FROM service_tariffs
-  WHERE service_type = $1
-  `,
-  [serviceType],
-);
-
-      const settings = settingsResult.rows[0];
-
-      if (!settings) {
+      const localOrder = serviceType === 'city' || serviceType === 'delivery';
+      // Temporary compatibility path for pre-multi-city Flutter releases.
+      // Missing cityId can only mean the historical Esil market; remove this
+      // fallback after those client versions are no longer supported.
+      const requestedCity = req.body?.cityId ?? 'esil';
+      if (localOrder && (typeof requestedCity !== 'string' || !/^[a-z][a-z0-9-]{1,39}$/.test(requestedCity))) {
         await client.query('ROLLBACK');
-
-        return res.status(500).json({
-          error: 'Pricing settings not found',
-        });
+        return res.status(400).json({ code: 'invalid_city', error: 'Invalid city' });
       }
-
-      const currentHour = Number(
-        new Intl.DateTimeFormat('en-US', {
-          timeZone: 'Asia/Almaty',
-          hour: '2-digit',
-          hourCycle: 'h23',
-        }).format(new Date()),
-      );
-
-      const isDay =
-        currentHour >= settings.day_start_hour &&
-        currentHour < settings.night_start_hour;
-
-      const minimumFare = isDay
-  ? settings.minimum_day_fare
-  : settings.minimum_night_fare;
-
-if (
-  minimumFare !== null &&
-  passengerPrice < minimumFare
-) {
-  await client.query('ROLLBACK');
-
-  return res.status(400).json({
-    error: 'Passenger price is below current minimum fare',
-    minimumFare,
-  });
-}
+      let cityId = null;
+      let citySlug = null;
+      if (localOrder) {
+        const cityResult = await client.query(
+          'SELECT id, slug FROM cities WHERE slug = $1 AND is_enabled = TRUE',
+          [requestedCity],
+        );
+        if (cityResult.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ code: 'invalid_city', error: 'Invalid city' });
+        }
+        cityId = cityResult.rows[0].id;
+        citySlug = cityResult.rows[0].slug;
+      }
 
       const result = await client.query(
         `
@@ -188,6 +185,7 @@ if (
           destination_lat,
           destination_lng,
           distance_meters
+          ,city_id
         )
         VALUES (
           $1,
@@ -200,7 +198,8 @@ if (
           $7,
           $8,
           $9,
-	  $10
+	  $10,
+          $11
         )
         RETURNING
           id,
@@ -215,6 +214,7 @@ if (
           destination_lat,
           destination_lng,
           distance_meters,
+          city_id,
           created_at
         `,
         [
@@ -228,8 +228,19 @@ if (
   destinationLat ?? null,
   destinationLng ?? null,
   distanceMeters ?? null,
+  cityId,
 ],
       );
+
+      if (serviceType === 'city' && Array.isArray(validation.value.stops)) {
+        for (const stop of validation.value.stops) {
+          await client.query(
+            `INSERT INTO order_stops (order_id, sequence, type, address, latitude, longitude)
+             VALUES ($1, $2, 'destination', $3, $4, $5)`,
+            [result.rows[0].id, stop.sequence, stop.address, stop.latitude, stop.longitude],
+          );
+        }
+      }
 
       const order = result.rows[0];
 
@@ -315,6 +326,7 @@ if (
           order: {
             id: order.id,
             serviceType: order.service_type,
+            cityId: citySlug,
             passengerPrice: order.passenger_price,
             pickupAddress: order.pickup_address,
             destinationAddress: order.destination_address,
@@ -323,6 +335,7 @@ if (
             destinationLat: order.destination_lat,
             destinationLng: order.destination_lng,
             distanceMeters: order.distance_meters,
+            stops: validation.value.stops ?? [{ sequence: 0, type: 'destination', address: order.destination_address, latitude: order.destination_lat, longitude: order.destination_lng }],
             createdAt: order.created_at,
           },
         });
@@ -333,6 +346,7 @@ if (
         res.status(201).json({
         id: order.id,
         serviceType: order.service_type,
+        cityId: citySlug,
 	status: order.status,
         passengerPrice: order.passenger_price,
         agreedPrice: order.agreed_price,
@@ -343,6 +357,7 @@ if (
         destinationLat: order.destination_lat,
         destinationLng: order.destination_lng,
         distanceMeters: order.distance_meters,
+        stops: validation.value.stops ?? [{ sequence: 0, type: 'destination', address: order.destination_address, latitude: order.destination_lat, longitude: order.destination_lng }],
         createdAt: order.created_at,
       });
     } catch (error) {
@@ -387,6 +402,7 @@ if (
           u.id,
           dp.status,
           dp.access_exempt,
+          dp.work_city_id,
           EXISTS (
             SELECT 1
             FROM driver_subscriptions ds
@@ -412,13 +428,7 @@ if (
 
       const driver = driverResult.rows[0];
 
-      const accessGranted =
-        driver.status === 'active' &&
-        driver.status !== 'suspended' &&
-        (
-          driver.access_exempt === true ||
-          driver.subscription_active === true
-        );
+      const accessGranted = driver.status === 'active';
 
       if (!accessGranted) {
         return res.status(403).json({
@@ -431,6 +441,7 @@ if (
         SELECT
           o.id,
           o.service_type,
+          o.city_id,
           o.passenger_price,
           o.pickup_address,
           o.destination_address,
@@ -440,6 +451,11 @@ if (
           o.destination_lng,
           o.distance_meters,
           o.created_at,
+          COALESCE(
+            (SELECT jsonb_agg(jsonb_build_object('sequence', s.sequence, 'type', s.type, 'address', s.address, 'latitude', s.latitude, 'longitude', s.longitude, 'reachedAt', s.reached_at) ORDER BY s.sequence)
+             FROM order_stops s WHERE s.order_id = o.id),
+            jsonb_build_array(jsonb_build_object('sequence', 0, 'type', 'destination', 'address', o.destination_address, 'latitude', o.destination_lat, 'longitude', o.destination_lng))
+          ) AS stops,
 
           dd.item_description,
           dd.pickup_handoff_type,
@@ -475,11 +491,17 @@ if (
           o.status = 'searching'
           AND st.enabled = TRUE
           AND ($1::text IS NULL OR o.service_type = $1)
+          AND (o.service_type NOT IN ('city', 'delivery') OR o.city_id = $2)
+          AND NOT EXISTS (
+            SELECT 1 FROM user_blocks ub
+            WHERE (ub.blocker_user_id = o.passenger_id AND ub.blocked_user_id = $3)
+               OR (ub.blocker_user_id = $3 AND ub.blocked_user_id = o.passenger_id)
+          )
 
         ORDER BY o.created_at DESC
         LIMIT 100
         `,
-        [serviceType],
+        [serviceType, driver.work_city_id, driver.id],
       );
 
       res.json(
@@ -523,6 +545,7 @@ if (
           return {
             id: order.id,
             serviceType: order.service_type,
+            cityId: order.city_id,
             passengerPrice: order.passenger_price,
             pickupAddress: order.pickup_address,
             destinationAddress: order.destination_address,
@@ -532,6 +555,7 @@ if (
             destinationLng: order.destination_lng,
             distanceMeters: order.distance_meters,
             createdAt: order.created_at,
+            stops: order.stops,
             delivery,
             intercity,
           };
@@ -555,6 +579,7 @@ if (
           u.id AS driver_id,
           dp.status AS driver_profile_status,
           dp.access_exempt,
+          dp.work_city_id,
           EXISTS (
             SELECT 1
             FROM driver_subscriptions ds
@@ -577,6 +602,7 @@ if (
         LEFT JOIN orders current_order
           ON current_order.driver_id = u.id
           AND current_order.service_type = 'city'
+          AND current_order.city_id = dp.work_city_id
           AND current_order.status = 'in_progress'
         WHERE (u.firebase_uid = $1 OR u.id::text = $1)
         `,
@@ -587,9 +613,7 @@ if (
         return res.status(403).json({ error: 'Driver profile not found' });
       }
       const driver = driverResult.rows[0];
-      const accessGranted =
-        driver.driver_profile_status === 'active'
-        && (driver.access_exempt === true || driver.subscription_active === true);
+      const accessGranted = driver.driver_profile_status === 'active';
       if (!accessGranted) {
         return res.status(403).json({ error: 'Driver access is not active' });
       }
@@ -627,6 +651,12 @@ if (
           AND candidate.status = 'searching'
           AND candidate.driver_id IS NULL
           AND candidate.passenger_id <> $3
+          AND NOT EXISTS (
+            SELECT 1 FROM user_blocks ub
+            WHERE (ub.blocker_user_id = candidate.passenger_id AND ub.blocked_user_id = $3)
+               OR (ub.blocker_user_id = $3 AND ub.blocked_user_id = candidate.passenger_id)
+          )
+          AND candidate.city_id = $5
           AND candidate.pickup_lat IS NOT NULL
           AND candidate.pickup_lng IS NOT NULL
           AND st.enabled = TRUE
@@ -646,6 +676,7 @@ if (
           driver.destination_lng,
           driver.driver_id,
           nextOrderMaximumDistanceMeters,
+          driver.work_city_id,
         ],
       );
 
@@ -687,6 +718,7 @@ if (
           u.id,
           dp.status,
           dp.access_exempt,
+          dp.work_city_id,
           EXISTS (
             SELECT 1
             FROM driver_subscriptions ds
@@ -698,7 +730,7 @@ if (
         FROM users u
         JOIN driver_profiles dp ON dp.user_id = u.id
         WHERE (u.firebase_uid = $1 OR u.id::text = $1)
-        FOR UPDATE OF u
+        FOR UPDATE OF u, dp
         `,
         [req.user.uid],
       );
@@ -707,15 +739,14 @@ if (
         return res.status(403).json({ error: 'Driver profile not found' });
       }
       const driver = driverResult.rows[0];
-      const accessGranted = driver.status === 'active'
-        && (driver.access_exempt === true || driver.subscription_active === true);
+      const accessGranted = driver.status === 'active';
       if (!accessGranted) {
         await client.query('ROLLBACK');
         return res.status(403).json({ error: 'Driver access is not active' });
       }
 
       const currentResult = await client.query(
-        `SELECT id, destination_lat, destination_lng
+        `SELECT id, city_id, destination_lat, destination_lng
          FROM orders
          WHERE driver_id = $1
            AND service_type = 'city'
@@ -742,7 +773,7 @@ if (
       }
 
       const nextResult = await client.query(
-        `SELECT id, passenger_id, driver_id, status, service_type,
+        `SELECT id, passenger_id, driver_id, status, service_type, city_id,
                 passenger_price, pickup_lat, pickup_lng
          FROM orders
          WHERE id = $1
@@ -762,6 +793,8 @@ if (
       });
       if (
         nextOrder.service_type !== 'city'
+        || Number(nextOrder.city_id) !== Number(driver.work_city_id)
+        || Number(nextOrder.city_id) !== Number(currentOrder.city_id)
         || nextOrder.status !== 'searching'
         || nextOrder.driver_id !== null
         || isSelfOrder({ passengerId: nextOrder.passenger_id, driverId: driver.id })
@@ -844,6 +877,7 @@ if (
         dp.car_model,
         dp.car_color,
         dp.car_number,
+        dp.work_city_id,
         EXISTS (
           SELECT 1
           FROM driver_subscriptions ds
@@ -872,10 +906,7 @@ if (
 
     const driver = driverResult.rows[0];
 
-    const accessGranted =
-      driver.status === 'active' &&
-      (driver.access_exempt === true ||
-        driver.subscription_active === true);
+    const accessGranted = driver.status === 'active';
 
     if (!accessGranted) {
       await client.query('ROLLBACK');
@@ -892,7 +923,9 @@ if (
         passenger_id,
         driver_id,
         status,
-        passenger_price
+        passenger_price,
+        service_type,
+        city_id
       FROM orders
       WHERE id = $1
       FOR UPDATE
@@ -910,12 +943,23 @@ if (
 
     const order = orderResult.rows[0];
 
+    if (['city', 'delivery'].includes(order.service_type) &&
+        Number(order.city_id) !== Number(driver.work_city_id)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ code: 'wrong_city', error: 'Order is in another city' });
+    }
+
     if (isSelfOrder({ passengerId: order.passenger_id, driverId: driver.id })) {
       await client.query('ROLLBACK');
 
       return res.status(409).json({
         error: 'Driver cannot accept their own passenger order',
       });
+    }
+
+    if (await areUsersBlocked(client, order.passenger_id, driver.id)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ code: 'user_blocked', error: 'Future matching is blocked' });
     }
 
     if (order.status !== 'searching' || order.driver_id !== null) {
@@ -968,6 +1012,7 @@ if (
         passenger_id,
         driver_id,
         status,
+        service_type,
         passenger_price,
         agreed_price,
         accepted_at,
@@ -1025,6 +1070,15 @@ if (
         sendToUser(passengerFirebaseUid, acceptedPayload);
       }
       sendToUser(req.user.uid, acceptedPayload);
+      if (passengerFirebaseUid) {
+        await sendPushToUser(passengerFirebaseUid, {
+          data: {
+            type: 'accepted',
+            orderId: acceptedOrder.id,
+            serviceType: acceptedOrder.service_type,
+          },
+        });
+      }
     } catch (error) {
       console.error('[OrderAcceptNotify]', error);
     }
@@ -1095,6 +1149,7 @@ if (
         u.id,
         dp.status,
         dp.access_exempt,
+        dp.work_city_id,
         EXISTS (
           SELECT 1
           FROM driver_subscriptions ds
@@ -1123,10 +1178,7 @@ if (
 
     const driver = driverResult.rows[0];
 
-    const accessGranted =
-      driver.status === 'active' &&
-      (driver.access_exempt === true ||
-        driver.subscription_active === true);
+    const accessGranted = driver.status === 'active';
 
     if (!accessGranted) {
       await client.query('ROLLBACK');
@@ -1145,6 +1197,7 @@ SELECT
   o.status,
   o.driver_id,
   o.service_type,
+  o.city_id,
   o.pickup_lat,
   o.pickup_lng,
   COALESCE(passenger.firebase_uid, passenger.id::text) AS passenger_firebase_uid
@@ -1167,12 +1220,23 @@ FOR UPDATE
 
     const order = orderResult.rows[0];
 
+    if (['city', 'delivery'].includes(order.service_type) &&
+        Number(order.city_id) !== Number(driver.work_city_id)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ code: 'wrong_city', error: 'Order is in another city' });
+    }
+
     if (isSelfOrder({ passengerId: order.passenger_id, driverId: driver.id })) {
       await client.query('ROLLBACK');
 
       return res.status(409).json({
         error: 'Driver cannot offer on their own passenger order',
       });
+    }
+
+    if (await areUsersBlocked(client, order.passenger_id, driver.id)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ code: 'user_blocked', error: 'Future matching is blocked' });
     }
 
     if (order.status !== 'searching' || order.driver_id !== null) {
@@ -1501,7 +1565,7 @@ FOR UPDATE
 
     const orderResult = await client.query(
       `SELECT o.id, o.passenger_id, o.driver_id, o.status,
-              o.service_type, o.passenger_price, o.pickup_lat, o.pickup_lng
+              o.service_type, o.city_id, o.passenger_price, o.pickup_lat, o.pickup_lng
        FROM orders o
        JOIN users passenger ON passenger.id = o.passenger_id
        WHERE o.id = $1
@@ -1514,6 +1578,11 @@ FOR UPDATE
       return res.status(403).json({ error: 'Order not found or access denied' });
     }
     const order = orderResult.rows[0];
+
+    if (await areUsersBlocked(client, order.passenger_id, preliminaryOffer.driver_id)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ code: 'user_blocked', error: 'Future matching is blocked' });
+    }
 
     if (order.status !== 'searching' || order.driver_id !== null) {
       await client.query('ROLLBACK');
@@ -1538,6 +1607,7 @@ FOR UPDATE
         dp.car_model,
         dp.car_color,
         dp.car_number,
+        dp.work_city_id,
         EXISTS (
           SELECT 1
           FROM driver_subscriptions ds
@@ -1570,6 +1640,12 @@ FOR UPDATE
 
     const offer = offerResult.rows[0];
 
+    if (['city', 'delivery'].includes(order.service_type) &&
+        Number(order.city_id) !== Number(offer.work_city_id)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ code: 'wrong_city', error: 'Driver works in another city' });
+    }
+
     if (offer.status !== 'pending') {
       await client.query('ROLLBACK');
 
@@ -1578,12 +1654,7 @@ FOR UPDATE
       });
     }
 
-    const driverAccessGranted =
-      offer.driver_profile_status === 'active' &&
-      (
-        offer.access_exempt === true ||
-        offer.subscription_active === true
-      );
+    const driverAccessGranted = offer.driver_profile_status === 'active';
 
     if (!driverAccessGranted) {
       await client.query('ROLLBACK');
@@ -1703,6 +1774,20 @@ FOR UPDATE
     await client.query('COMMIT');
 
     const acceptedOrder = acceptedOrderResult.rows[0];
+    if (acceptedOrder.status === 'accepted') {
+      try {
+        const driverUidResult = await pool.query(
+          'SELECT COALESCE(firebase_uid, id::text) AS identity_key FROM users WHERE id = $1',
+          [offer.driver_id],
+        );
+        const driverUid = driverUidResult.rows[0]?.identity_key;
+        if (driverUid) await sendPushToUser(driverUid, {
+          data: { type: 'offer_accepted', orderId: acceptedOrder.id, serviceType: order.service_type },
+        });
+      } catch (pushError) {
+        console.error('[OrderOfferAcceptPush]', pushError);
+      }
+    }
 
     res.json({
       id: acceptedOrder.id,
@@ -1787,8 +1872,6 @@ router.post('/:orderId/arrive', requireAuth, async (req, res) => {
     if (passengerUid) {
       try {
         await sendPushToUser(passengerUid, {
-          title: 'TULPAR',
-          body: 'Водитель на месте и ожидает вас.',
           data: {
             type: 'driver_arrived',
             orderId: req.params.orderId,
@@ -1850,6 +1933,7 @@ router.post('/:orderId/start', requireAuth, async (req, res) => {
   status: 'in_progress',
   startedAt: result.rows[0].started_at,
 });
+    await pushOrderEvent(req.params.orderId, 'passenger', 'in_progress');
 
     res.json({
       id: result.rows[0].id,
@@ -1867,6 +1951,51 @@ router.post('/:orderId/start', requireAuth, async (req, res) => {
 
 
 // Водитель завершает поездку
+router.post('/:orderId/stops/advance', requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `SELECT s.id, s.sequence
+       FROM order_stops s
+       JOIN orders o ON o.id = s.order_id
+       JOIN users driver ON driver.id = o.driver_id
+       WHERE o.id = $1
+         AND (driver.firebase_uid = $2 OR driver.id::text = $2)
+         AND o.status = 'in_progress'
+         AND s.reached_at IS NULL
+       ORDER BY s.sequence
+       FOR UPDATE OF s`,
+      [req.params.orderId, req.user.uid],
+    );
+    if (result.rows.length < 2) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'No intermediate stop to advance' });
+    }
+    await client.query('UPDATE order_stops SET reached_at = now() WHERE id = $1', [result.rows[0].id]);
+    const stopsResult = await client.query(
+      `SELECT sequence, type, address, latitude, longitude, reached_at
+       FROM order_stops WHERE order_id = $1 ORDER BY sequence`,
+      [req.params.orderId],
+    );
+    await client.query('COMMIT');
+    return res.json({ stops: stopsResult.rows.map((stop) => ({
+      sequence: stop.sequence,
+      type: stop.type,
+      address: stop.address,
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+      reachedAt: stop.reached_at,
+    })) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('[OrderStopAdvance]', error);
+    return res.status(500).json({ error: 'Failed to advance order stop' });
+  } finally {
+    client.release();
+  }
+});
+
 router.post('/:orderId/complete', requireAuth, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1898,6 +2027,17 @@ router.post('/:orderId/complete', requireAuth, async (req, res) => {
       return res.status(409).json({ error: 'Order cannot be completed' });
     }
     const currentOrder = currentResult.rows[0];
+
+    const pendingStops = await client.query(
+      `SELECT sequence FROM order_stops
+       WHERE order_id = $1 AND reached_at IS NULL
+       ORDER BY sequence`,
+      [currentOrder.id],
+    );
+    if (pendingStops.rows.length > 1) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Intermediate stops are not completed' });
+    }
 
     const linkedQueuedResult = await client.query(
       `SELECT next_order.id, next_order.driver_id, next_order.status,
@@ -1977,6 +2117,7 @@ router.post('/:orderId/complete', requireAuth, async (req, res) => {
 
     await client.query('COMMIT');
     const completedOrder = completedResult.rows[0];
+    await pushOrderEvent(currentOrder.id, 'passenger', 'completed');
 
 	await notifyOrderParticipants(currentOrder.id, {
       type: 'order_status_changed',
@@ -2062,7 +2203,7 @@ router.get('/:orderId/driver-profile', requireAuth, async (req, res) => {
         AND r.from_user_id <> r.to_user_id AND rated_order.status = 'completed'
     `, [driver.driver_id]);
     const reviews = await pool.query(`
-      SELECT r.score, r.comment, r.created_at
+      SELECT r.id, r.score, r.comment, r.created_at
       FROM ratings r
       JOIN orders rated_order ON rated_order.id = r.order_id
       WHERE r.to_user_id = $1 AND rated_order.driver_id = r.to_user_id
@@ -2073,6 +2214,7 @@ router.get('/:orderId/driver-profile', requireAuth, async (req, res) => {
     `, [driver.driver_id]);
     const summary = aggregate.rows[0];
     return res.json({
+      driverId: driver.driver_id,
       name: driver.name,
       carModel: driver.car_model,
       carColor: driver.car_color,
@@ -2080,7 +2222,7 @@ router.get('/:orderId/driver-profile', requireAuth, async (req, res) => {
       averageRating: summary?.average_rating == null ? null : Number(summary.average_rating),
       ratingsCount: Number(summary?.ratings_count ?? 0),
       reviews: reviews.rows.map((r) => ({
-        score: Number(r.score), comment: r.comment, createdAt: r.created_at,
+        id: r.id, score: Number(r.score), comment: r.comment, createdAt: r.created_at,
       })),
     });
   } catch (error) {
@@ -2089,7 +2231,7 @@ router.get('/:orderId/driver-profile', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/:orderId/rating', requireAuth, async (req, res) => {
+router.post('/:orderId/rating', requireAuth, requireCurrentTerms, async (req, res) => {
   const client = await pool.connect();
 
   try {
@@ -2314,6 +2456,11 @@ router.get('/active/me', requireAuth, async (req, res) => {
         o.driver_arrived_at,
         o.started_at,
         o.completed_at,
+        COALESCE(
+          (SELECT jsonb_agg(jsonb_build_object('sequence', s.sequence, 'type', s.type, 'address', s.address, 'latitude', s.latitude, 'longitude', s.longitude, 'reachedAt', s.reached_at) ORDER BY s.sequence)
+           FROM order_stops s WHERE s.order_id = o.id),
+          jsonb_build_array(jsonb_build_object('sequence', 0, 'type', 'destination', 'address', o.destination_address, 'latitude', o.destination_lat, 'longitude', o.destination_lng))
+        ) AS stops,
         u.id AS current_user_id,
         o.driver_lat,
 	o.driver_lng,
@@ -2398,6 +2545,7 @@ router.get('/active/me', requireAuth, async (req, res) => {
         driverArrivedAt: order.driver_arrived_at,
         startedAt: order.started_at,
         completedAt: order.completed_at,
+        stops: order.stops,
 	driverLat: order.driver_lat,
 	driverLng: order.driver_lng,
 	driverLocationUpdatedAt: order.driver_location_updated_at,
@@ -2444,6 +2592,7 @@ router.post('/:orderId/cancel', requireAuth, async (req, res) => {
         passenger_id,
         driver_id,
         status,
+        service_type,
         queued_after_order_id
       FROM orders
       WHERE id = $1
@@ -2473,9 +2622,33 @@ router.post('/:orderId/cancel', requireAuth, async (req, res) => {
       });
     }
 
-    // Пассажир может отменить до начала поездки.
+    if (order.service_type === 'city' && order.status === 'cancelled') {
+      await client.query('COMMIT');
+      return res.json({ id: order.id, status: 'cancelled', alreadyCancelled: true });
+    }
+
+    const cityOrder = order.service_type === 'city';
+    const cancellationRole = isPassenger ? 'passenger' : 'driver';
+    if (cityOrder && !canCancelCityOrder(order.status, cancellationRole)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Order cannot be cancelled now' });
+    }
+    const reason = cityOrder
+      ? validateCityCancellationReason({
+        status: order.status,
+        role: cancellationRole,
+        reasonCode: req.body?.reasonCode,
+        reasonText: req.body?.reasonText,
+      })
+      : { ok: true, reasonCode: null, reasonText: null };
+    if (!reason.ok) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: reason.error });
+    }
+
+    // Non-city orders keep their existing cancellation policy.
     if (
-      isPassenger &&
+      !cityOrder && isPassenger &&
       !['searching', 'queued', 'accepted', 'driver_arrived'].includes(order.status)
     ) {
       await client.query('ROLLBACK');
@@ -2485,10 +2658,8 @@ router.post('/:orderId/cancel', requireAuth, async (req, res) => {
       });
     }
 
-    // Водитель может отказаться только после принятия,
-    // но до начала поездки.
     if (
-      isDriver &&
+      !cityOrder && isDriver &&
       !['accepted', 'driver_arrived'].includes(order.status)
     ) {
       await client.query('ROLLBACK');
@@ -2504,6 +2675,10 @@ router.post('/:orderId/cancel', requireAuth, async (req, res) => {
       SET
         status = 'cancelled',
         cancelled_at = now(),
+        cancelled_by_user_id = $2,
+        cancelled_by_role = $3,
+        cancellation_reason_code = $4,
+        cancellation_reason_text = $5,
         queued_after_order_id = NULL,
         updated_at = now()
       WHERE id = $1
@@ -2512,7 +2687,7 @@ router.post('/:orderId/cancel', requireAuth, async (req, res) => {
         status,
         cancelled_at
       `,
-      [order.id],
+      [order.id, userId, cancellationRole, reason.reasonCode, reason.reasonText],
     );
 
     await client.query(
@@ -2539,6 +2714,8 @@ router.post('/:orderId/cancel', requireAuth, async (req, res) => {
   cancelledBy:
     isPassenger ? 'passenger' : 'driver',
 });
+    await pushOrderEvent(order.id, isPassenger ? 'driver' : 'passenger', 'cancelled',
+      cityOrder ? { cancelledBy: cancellationRole } : {});
 
     res.json({
       id: result.rows[0].id,
@@ -2716,9 +2893,6 @@ router.post('/:orderId/location', requireAuth, async (req, res) => {
     if (location.should_notify_approaching && location.passenger_uid) {
       try {
         const pushResult = await sendPushToUser(location.passenger_uid, {
-          title: 'Водитель скоро будет на месте',
-          body:
-            'Пожалуйста, выходите к месту подачи — водитель уже подъезжает.',
           data: {
             type: 'driver_approaching_pickup',
             orderId: req.params.orderId,
@@ -2951,6 +3125,11 @@ router.get('/:orderId/details', requireAuth, async (req, res) => {
           o.started_at,
           o.completed_at,
           o.cancelled_at,
+          COALESCE(
+            (SELECT jsonb_agg(jsonb_build_object('sequence', s.sequence, 'type', s.type, 'address', s.address, 'latitude', s.latitude, 'longitude', s.longitude, 'reachedAt', s.reached_at) ORDER BY s.sequence)
+             FROM order_stops s WHERE s.order_id = o.id),
+            jsonb_build_array(jsonb_build_object('sequence', 0, 'type', 'destination', 'address', o.destination_address, 'latitude', o.destination_lat, 'longitude', o.destination_lng))
+          ) AS stops,
 
           COALESCE(passenger.firebase_uid, passenger.id::text) AS passenger_uid,
           passenger.name AS passenger_name,
@@ -3090,6 +3269,7 @@ router.get('/:orderId/details', requireAuth, async (req, res) => {
         destinationLng: order.destination_lng,
 
         distanceMeters: order.distance_meters,
+        stops: order.stops,
 
           driverLat: order.driver_lat,
           driverLng: order.driver_lng,
@@ -3158,6 +3338,11 @@ router.get('/:orderId/details', requireAuth, async (req, res) => {
           o.driver_arrived_at,
           o.started_at,
           o.completed_at,
+          COALESCE(
+            (SELECT jsonb_agg(jsonb_build_object('sequence', s.sequence, 'type', s.type, 'address', s.address, 'latitude', s.latitude, 'longitude', s.longitude, 'reachedAt', s.reached_at) ORDER BY s.sequence)
+             FROM order_stops s WHERE s.order_id = o.id),
+            jsonb_build_array(jsonb_build_object('sequence', 0, 'type', 'destination', 'address', o.destination_address, 'latitude', o.destination_lat, 'longitude', o.destination_lng))
+          ) AS stops,
 
           passenger.id AS passenger_id,
           passenger.name AS passenger_name,
@@ -3235,6 +3420,8 @@ router.get('/:orderId/details', requireAuth, async (req, res) => {
 
           distanceMeters:
             order.distance_meters,
+
+          stops: order.stops,
 
           passengerId:
             order.passenger_id,

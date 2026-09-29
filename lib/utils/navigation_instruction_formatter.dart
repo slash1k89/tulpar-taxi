@@ -1,4 +1,5 @@
 import '../models/navigation_step.dart';
+import '../l10n/generated/app_localizations.dart';
 
 enum NavigationManeuverIcon {
   left,
@@ -61,6 +62,116 @@ class NavigationInstructionFormatter {
       distanceLabel: formatDistancePrefix(distanceToManeuverMeters),
       streetName: street.isEmpty ? null : street,
     );
+  }
+
+  static NavigationInstructionPresentation formatLocalized(
+    NavigationStep step,
+    AppLocalizations l10n, {
+    double? distanceToManeuverMeters,
+    bool arrivalConfirmed = true,
+  }) {
+    final type = _normalize(step.type);
+    final modifier = _normalize(step.modifier);
+    final waitingForArrival = type == 'arrive' && !arrivalConfirmed;
+    final street = step.streetName.trim();
+    return NavigationInstructionPresentation(
+      instruction: waitingForArrival
+          ? l10n.navContinueToPoint
+          : _localizedInstruction(l10n, type, modifier, step.exitNumber),
+      icon: waitingForArrival
+          ? NavigationManeuverIcon.straight
+          : _icon(type: type, modifier: modifier),
+      distanceLabel: formatDistancePrefixLocalized(
+        distanceToManeuverMeters,
+        l10n,
+      ),
+      streetName: street.isEmpty ? null : street,
+    );
+  }
+
+  static String? formatDistancePrefixLocalized(
+    double? meters,
+    AppLocalizations l10n,
+  ) {
+    if (meters == null || !meters.isFinite || meters < 25) return null;
+    if (meters < 1000) {
+      final rounded = meters < 100
+          ? (meters / 10).round() * 10
+          : (meters / 50).round() * 50;
+      return l10n.navDistanceMeters(rounded);
+    }
+    return l10n.navDistanceKilometers(_formatKilometersLocalized(meters, l10n));
+  }
+
+  static String? formatRouteSummaryLocalized({
+    required double? distanceMeters,
+    required double? durationSeconds,
+    required AppLocalizations l10n,
+  }) {
+    if (distanceMeters == null ||
+        durationSeconds == null ||
+        !distanceMeters.isFinite ||
+        !durationSeconds.isFinite ||
+        distanceMeters <= 0 ||
+        durationSeconds <= 0) {
+      return null;
+    }
+    final distance = distanceMeters < 1000
+        ? l10n.navMetersShort(distanceMeters.round())
+        : l10n.navKilometersShort(
+            _formatKilometersLocalized(distanceMeters, l10n),
+          );
+    final totalMinutes = (durationSeconds / 60).ceil();
+    final duration = totalMinutes < 60
+        ? l10n.navMinutesShort(totalMinutes)
+        : l10n.navHoursMinutesShort(totalMinutes ~/ 60, totalMinutes % 60);
+    return '$distance • $duration';
+  }
+
+  static String _localizedInstruction(
+    AppLocalizations l10n,
+    String type,
+    String modifier,
+    int? exitNumber,
+  ) {
+    if (type == 'arrive') return l10n.navArrived;
+    if (type == 'depart') return l10n.navDepart;
+    if (type == 'exit roundabout' || type == 'exit rotary') {
+      return l10n.navExitRoundabout;
+    }
+    if (_isRoundabout(type)) {
+      return exitNumber == null
+          ? l10n.navEnterRoundabout
+          : l10n.navRoundaboutExit(exitNumber);
+    }
+    if (type == 'uturn' || modifier == 'uturn') return l10n.navUTurn;
+    if (type == 'fork') {
+      if (_isLeft(modifier)) return l10n.navKeepLeft;
+      if (_isRight(modifier)) return l10n.navKeepRight;
+      return l10n.navContinue;
+    }
+    if (type == 'merge') {
+      if (_isLeft(modifier)) return l10n.navMergeLeft;
+      if (_isRight(modifier)) return l10n.navMergeRight;
+      return l10n.navMerge;
+    }
+    if (type == 'on ramp' || type == 'onramp') return l10n.navOnRamp;
+    if (type == 'off ramp' || type == 'offramp') return l10n.navOffRamp;
+    if (type == 'continue' || type == 'new name') return l10n.navStraight;
+    if (type == 'turn' || type == 'end of road') {
+      return switch (modifier) {
+        'sharp left' => l10n.navTurnSharpLeft,
+        'sharp right' => l10n.navTurnSharpRight,
+        'slight left' => l10n.navTurnSlightLeft,
+        'slight right' => l10n.navTurnSlightRight,
+        'left' || 'keep left' => l10n.navTurnLeft,
+        'right' || 'keep right' => l10n.navTurnRight,
+        'uturn' => l10n.navUTurn,
+        'straight' => l10n.navStraight,
+        _ => l10n.navContinue,
+      };
+    }
+    return l10n.navContinue;
   }
 
   static String? formatDistancePrefix(double? meters) {
@@ -224,6 +335,17 @@ class NavigationInstructionFormatter {
     final value = (meters / 1000).toStringAsFixed(1);
     return (value.endsWith('.0') ? value.substring(0, value.length - 2) : value)
         .replaceAll('.', ',');
+  }
+
+  static String _formatKilometersLocalized(
+    double meters,
+    AppLocalizations l10n,
+  ) {
+    final value = (meters / 1000).toStringAsFixed(1);
+    final compact = value.endsWith('.0')
+        ? value.substring(0, value.length - 2)
+        : value;
+    return l10n.localeName == 'en' ? compact : compact.replaceAll('.', ',');
   }
 
   static String _metersWord(int value) {

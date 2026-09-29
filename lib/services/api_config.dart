@@ -1,4 +1,4 @@
-﻿class TulparApiConfig {
+class TulparApiConfig {
   const TulparApiConfig._();
 
   static const String baseUrl = String.fromEnvironment(
@@ -6,4 +6,3 @@
     defaultValue: 'https://api.tulpartaxi.kz',
   );
 }
-

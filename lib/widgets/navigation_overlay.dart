@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../models/navigation_step.dart';
+import '../l10n/generated/app_localizations.dart';
 import '../services/navigation_progress_controller.dart';
 import '../services/navigation_voice_service.dart';
 import '../utils/navigation_instruction_formatter.dart';
@@ -222,28 +223,32 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
     final step = _progress.currentStep;
     if (step == null) return const SizedBox.shrink();
 
-    final presentation = NavigationInstructionFormatter.format(
+    final l10n = AppLocalizations.of(context);
+    final presentation = NavigationInstructionFormatter.formatLocalized(
       step,
+      l10n,
       distanceToManeuverMeters: _progress.distanceToManeuverMeters,
       arrivalConfirmed: _arrivalConfirmed(),
     );
     final hasLiveSummary =
         (_progress.remainingDistanceMeters ?? 0) > 0 &&
         (_progress.remainingDurationSeconds ?? 0) > 0;
-    final routeSummary = NavigationInstructionFormatter.formatRouteSummary(
-      distanceMeters: hasLiveSummary
-          ? _progress.remainingDistanceMeters
-          : widget.routeDistanceMeters,
-      durationSeconds: hasLiveSummary
-          ? _progress.remainingDurationSeconds
-          : widget.routeDurationSeconds,
-    );
+    final routeSummary =
+        NavigationInstructionFormatter.formatRouteSummaryLocalized(
+          distanceMeters: hasLiveSummary
+              ? _progress.remainingDistanceMeters
+              : widget.routeDistanceMeters,
+          durationSeconds: hasLiveSummary
+              ? _progress.remainingDurationSeconds
+              : widget.routeDurationSeconds,
+          l10n: l10n,
+        );
     final semanticsLabel = [
       presentation.distanceLabel,
       presentation.instruction,
       presentation.streetName,
-      if (routeSummary != null) 'Осталось: $routeSummary',
-      if (widget.isRerouting) 'Перестраиваем маршрут',
+      if (routeSummary != null) l10n.navRemaining(routeSummary),
+      if (widget.isRerouting) l10n.navigationRecalculating,
       widget.rerouteErrorMessage,
     ].whereType<String>().join('. ');
     final colors = Theme.of(context).colorScheme;
@@ -343,7 +348,7 @@ class _NavigationOverlayState extends State<NavigationOverlay> {
                         if (widget.isRerouting) ...[
                           const SizedBox(height: 8),
                           Text(
-                            'Перестраиваем маршрут…',
+                            l10n.navigationRecalculating,
                             key: const Key('navigation_rerouting'),
                             style: TextStyle(
                               color: colors.primary,

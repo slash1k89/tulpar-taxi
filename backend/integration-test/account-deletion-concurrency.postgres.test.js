@@ -22,6 +22,7 @@ import {
 
 const pool = createIntegrationPool('account-deletion-concurrency');
 let sequence = 0;
+let phoneSequence = 100;
 
 function identity(label) {
   sequence += 1;
@@ -59,11 +60,13 @@ function ordersApp(firebaseUid) {
 }
 
 async function insertUser(firebaseUid, { driver = false } = {}) {
+  phoneSequence += 1;
+  const phone = `+77${String(phoneSequence).padStart(9, '0')}`;
   const result = await pool.query(
     `INSERT INTO users (firebase_uid, phone, name)
-     VALUES ($1, '+70000000000', 'Concurrency Fixture')
+     VALUES ($1, $2, 'Concurrency Fixture')
      RETURNING id`,
-    [firebaseUid],
+    [firebaseUid, phone],
   );
   const userId = result.rows[0].id;
   if (driver) {

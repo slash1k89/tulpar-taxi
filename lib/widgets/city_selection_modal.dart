@@ -1,10 +1,25 @@
 import 'package:flutter/material.dart';
 import '../models/city.dart';
+import '../l10n/generated/app_localizations.dart';
+import '../services/city_service.dart';
 
 Future<City?> showCitySelectionModal(
   BuildContext context, {
   required String currentCityId,
+  Future<List<City>> Function()? citiesLoader,
 }) async {
+  List<City> cities;
+  try {
+    cities = await (citiesLoader?.call() ?? CityService.getEnabledCities());
+  } catch (_) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(AppLocalizations.of(context).citiesUnavailable)),
+      );
+    }
+    return null;
+  }
+  if (!context.mounted || cities.isEmpty) return null;
   return showModalBottomSheet<City>(
     context: context,
     isScrollControlled: true, // Исправлено: безопасное масштабирование
@@ -18,22 +33,26 @@ Future<City?> showCitySelectionModal(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Выберите город',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            Text(
+              AppLocalizations.of(context).mapChooseCity,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             Flexible(
               // Исправлено: защита от Bottom Overflow
               child: ListView.builder(
                 shrinkWrap: true,
-                itemCount: availableCities.length,
+                itemCount: cities.length,
                 itemBuilder: (context, index) {
-                  final city = availableCities[index];
+                  final city = cities[index];
                   final isSelected = city.id == currentCityId;
 
                   return ListTile(
-                    title: Text(city.name),
+                    title: Text(
+                      city.localizedName(
+                        Localizations.localeOf(context).languageCode,
+                      ),
+                    ),
                     trailing: isSelected
                         ? const Icon(Icons.check_circle, color: Colors.amber)
                         : null,

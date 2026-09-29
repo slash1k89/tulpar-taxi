@@ -10,6 +10,10 @@ import 'package:taxi_esil/services/driver_orders_poll_controller.dart';
 import 'package:taxi_esil/services/order_offer_service.dart';
 import 'package:taxi_esil/services/tulpar_api_client.dart';
 import 'package:taxi_esil/models/order_service_type.dart';
+import 'package:taxi_esil/models/city.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
+import 'package:taxi_esil/widgets/delivery_details_view.dart';
+import 'package:taxi_esil/widgets/intercity_details_view.dart';
 
 Future<void> flush(WidgetTester tester) async {
   for (var i = 0; i < 4; i++) {
@@ -26,6 +30,99 @@ Map<String, dynamic> order(String id) => {
 };
 
 void main() {
+  testWidgets('driver work city is persisted before orders are refreshed', (
+    tester,
+  ) async {
+    String? updatedCity;
+    var availableLoads = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: DriverScreen(
+          userId: 'driver-test',
+          initialWorkCity: cityById('esil'),
+          workCitiesLoader: () async => [cityById('esil'), cityById('rudny')],
+          workCityUpdater: (cityId) async {
+            updatedCity = cityId;
+            return cityId;
+          },
+          activeOrderLoader: () async => null,
+          availableOrdersLoader: () async {
+            availableLoads++;
+            return const [];
+          },
+        ),
+      ),
+    );
+    await flush(tester);
+
+    await tester.tap(find.byKey(const Key('driver_work_city_selector')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Рудный'));
+    await tester.pumpAndSettle();
+
+    expect(updatedCity, 'rudny');
+    expect(find.text('Рудный'), findsOneWidget);
+    expect(availableLoads, greaterThanOrEqualTo(2));
+  });
+
+  for (final code in ['ru', 'kk', 'en']) {
+    testWidgets(
+      'driver delivery and intercity details use light text in $code',
+      (tester) async {
+        for (final serviceType in ['delivery', 'intercity']) {
+          await tester.pumpWidget(
+            MaterialApp(
+              locale: Locale(code),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              home: DriverScreen(
+                key: ValueKey(serviceType),
+                serviceType: serviceType == 'intercity'
+                    ? OrderServiceType.intercity
+                    : OrderServiceType.city,
+                userId: 'driver-test',
+                orderOfferService: _Offers(),
+                activeOrderLoader: () async => null,
+                availableOrdersLoader: () async => [
+                  {
+                    ...order('card-$serviceType'),
+                    'serviceType': serviceType,
+                    'delivery': {
+                      'itemDescription': 'Documents',
+                      'destinationApartment': '25',
+                    },
+                    'intercity': {'passengerCount': 2},
+                  },
+                ],
+              ),
+            ),
+          );
+          await flush(tester);
+          if (serviceType == 'delivery') {
+            expect(
+              tester
+                  .widget<DeliveryDetailsView>(find.byType(DeliveryDetailsView))
+                  .onDarkCard,
+              isTrue,
+            );
+          } else {
+            expect(
+              tester
+                  .widget<IntercityDetailsView>(
+                    find.byType(IntercityDetailsView),
+                  )
+                  .onDarkCard,
+              isTrue,
+            );
+          }
+        }
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
   test('new-order messages name both service types', () {
     expect(OrderServiceType.city.newDriverOrderMessage, 'Новый заказ — ТАКСИ');
     expect(
@@ -41,6 +138,9 @@ void main() {
     var calls = 0;
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: DriverScreen(
           userId: 'driver-test',
           orderOfferService: _Offers(),
@@ -291,6 +391,9 @@ void main() {
       var calls = 0;
       await tester.pumpWidget(
         MaterialApp(
+          locale: const Locale('ru'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: DriverScreen(
             userId: 'driver-test',
             orderOfferService: _Offers(),
@@ -328,6 +431,9 @@ void main() {
       var calls = 0;
       await tester.pumpWidget(
         MaterialApp(
+          locale: const Locale('ru'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: DriverScreen(
             userId: 'driver-test',
             orderOfferService: _Offers(),
@@ -370,6 +476,9 @@ void main() {
     }
 
     Widget app() => MaterialApp(
+      locale: const Locale('ru'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       navigatorKey: navigator,
       home: DriverScreen(
         userId: 'driver-test',

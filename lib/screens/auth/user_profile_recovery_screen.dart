@@ -7,6 +7,7 @@ import '../../services/user_profile_recovery_service.dart';
 import '../driver/driver_map_screen.dart';
 import '../map/map_screen.dart';
 import '../map/order_tracking_screen.dart';
+import '../../l10n/generated/app_localizations.dart';
 
 class UserProfileRecoveryScreen extends StatefulWidget {
   const UserProfileRecoveryScreen({
@@ -68,8 +69,7 @@ class _UserProfileRecoveryScreenState extends State<UserProfileRecoveryScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _error =
-            'Не удалось проверить профиль. Проверьте интернет и повторите.';
+        _error = AppLocalizations.of(context).recoveryCheckFailed;
         _isLoading = false;
       });
     }
@@ -101,7 +101,7 @@ class _UserProfileRecoveryScreenState extends State<UserProfileRecoveryScreen> {
   Future<void> _submitName() async {
     final name = _nameController.text.trim();
     if (name.isEmpty || name.length > 80) {
-      setState(() => _error = 'Введите имя длиной не более 80 символов.');
+      setState(() => _error = AppLocalizations.of(context).recoveryNameLimit);
       return;
     }
     await _inspect(confirmedName: name);
@@ -121,7 +121,7 @@ class _UserProfileRecoveryScreenState extends State<UserProfileRecoveryScreen> {
   Widget build(BuildContext context) {
     final result = _result;
     return Scaffold(
-      appBar: AppBar(title: const Text('Восстановление профиля')),
+      appBar: AppBar(title: Text(AppLocalizations.of(context).recoveryTitle)),
       body: SafeArea(
         child: _isLoading
             ? const Center(child: CircularProgressIndicator())
@@ -136,38 +136,35 @@ class _UserProfileRecoveryScreenState extends State<UserProfileRecoveryScreen> {
                   const SizedBox(height: 20),
                   Text(
                     result?.requiresTrustedMigration == true
-                        ? 'Профиль имеет старый формат'
+                        ? AppLocalizations.of(context).recoveryLegacyTitle
                         : result?.needsName == true
-                        ? 'Укажите имя'
-                        : 'Не удалось завершить проверку',
+                        ? AppLocalizations.of(context).recoveryEnterName
+                        : AppLocalizations.of(context).recoveryIncomplete,
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.headlineSmall,
                   ),
                   const SizedBox(height: 12),
                   if (result?.requiresTrustedMigration == true) ...[
-                    const Text(
-                      'Защищённые поля нельзя безопасно восстановить с телефона. '
-                      'Для этого профиля требуется точечная административная миграция.',
+                    Text(
+                      AppLocalizations.of(context).recoveryAdminBody,
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 16),
                     _FieldList(
-                      title: 'Требуют административного восстановления:',
+                      title: AppLocalizations.of(context).recoveryAdminFields,
                       fields: result!.adminMigrationFields,
                     ),
                     if (result.legacyFieldsPresent) ...[
                       const SizedBox(height: 16),
-                      const Text(
-                        'Старые isDriver, driverActiveUntil и данные автомобиля '
-                        'обнаружены, но не используются для выдачи водительских прав.',
+                      Text(
+                        AppLocalizations.of(context).recoveryLegacyWarning,
                         textAlign: TextAlign.center,
                       ),
                     ],
                   ],
                   if (result?.needsName == true) ...[
-                    const Text(
-                      'Имя отсутствует в профиле и Firebase Auth. Введите своё имя — '
-                      'остальные защищённые поля останутся без изменений.',
+                    Text(
+                      AppLocalizations.of(context).recoveryNameBody,
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 16),
@@ -176,15 +173,17 @@ class _UserProfileRecoveryScreenState extends State<UserProfileRecoveryScreen> {
                       controller: _nameController,
                       textCapitalization: TextCapitalization.words,
                       maxLength: 80,
-                      decoration: const InputDecoration(
-                        labelText: 'Имя',
-                        prefixIcon: Icon(Icons.person_outline),
+                      decoration: InputDecoration(
+                        labelText: AppLocalizations.of(context).nameLabel,
+                        prefixIcon: const Icon(Icons.person_outline),
                       ),
                     ),
                     ElevatedButton(
                       key: const Key('recover_profile_button'),
                       onPressed: _submitName,
-                      child: const Text('Сохранить и продолжить'),
+                      child: Text(
+                        AppLocalizations.of(context).recoverySaveContinue,
+                      ),
                     ),
                   ],
                   if (_error != null) ...[
@@ -201,12 +200,14 @@ class _UserProfileRecoveryScreenState extends State<UserProfileRecoveryScreen> {
                   OutlinedButton(
                     key: const Key('retry_profile_recovery_button'),
                     onPressed: _inspect,
-                    child: const Text('Проверить снова'),
+                    child: Text(
+                      AppLocalizations.of(context).recoveryCheckAgain,
+                    ),
                   ),
                   TextButton(
                     key: const Key('recovery_sign_out_button'),
                     onPressed: _signOut,
-                    child: const Text('Выйти из аккаунта'),
+                    child: Text(AppLocalizations.of(context).recoverySignOut),
                   ),
                 ],
               ),
@@ -231,21 +232,23 @@ class _FieldList extends StatelessWidget {
         ...fields.map(
           (field) => Padding(
             padding: const EdgeInsets.only(bottom: 4),
-            child: Text('• ${_fieldLabel(field)}'),
+            child: Text(
+              '• ${_fieldLabel(field, AppLocalizations.of(context))}',
+            ),
           ),
         ),
       ],
     );
   }
 
-  String _fieldLabel(String field) {
+  String _fieldLabel(String field, AppLocalizations l10n) {
     return switch (field) {
-      'uid' => 'идентификатор аккаунта (uid)',
-      'name' => 'имя',
-      'phone' => 'подтверждённый телефон',
-      'role' => 'базовая роль passenger',
-      'rating' => 'начальный рейтинг 5.0',
-      'createdAt' => 'дата создания из Firebase Auth',
+      'uid' => l10n.recoveryFieldUid,
+      'name' => l10n.recoveryFieldName,
+      'phone' => l10n.recoveryFieldPhone,
+      'role' => l10n.recoveryFieldRole,
+      'rating' => l10n.recoveryFieldRating,
+      'createdAt' => l10n.recoveryFieldCreatedAt,
       _ => field,
     };
   }

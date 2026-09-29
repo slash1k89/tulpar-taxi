@@ -107,7 +107,16 @@ credentials-*.json
 *.tgz
 *.sql.gz
 *.sql.dump
+*.hprof
 /work/
 /tmp/
 /temp/
+# Local startup/crash diagnostics captured during device checks.
+/meken_*_log.txt
+/meken_*_screen.png
+/server_store_smoke_setup.sh
+/backend/tools/rollout-smoke-*.mjs
+/backend/tools/release-*-smoke.*
 # tulpar-schema.sql is a reviewed schema-only integration-test dependency.
+.local-data/
+*.osm.pbf

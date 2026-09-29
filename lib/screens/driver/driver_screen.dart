@@ -6,7 +6,11 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../models/order_service_type.dart';
+import '../../models/city.dart';
+import '../../l10n/generated/app_localizations.dart';
 import '../chat/chat_screen.dart';
+import '../../widgets/chat_unread_badge.dart';
+import '../../widgets/order_stops_view.dart';
 import 'driver_map_screen.dart';
 import '../../widgets/app_drawer.dart';
 import '../../services/order_offer_service.dart';
@@ -19,6 +23,7 @@ import '../../services/navigation_voice_service.dart';
 import '../../utils/restartable_stream.dart';
 import '../../widgets/delivery_details_view.dart';
 import '../../widgets/intercity_details_view.dart';
+import '../../widgets/city_selection_modal.dart';
 import '../../services/app_identity_service.dart';
 import '../../services/driver_orders_poll_controller.dart';
 
@@ -33,6 +38,9 @@ class DriverScreen extends StatefulWidget {
     this.orderOfferService,
     this.availableOrdersLoader,
     this.activeOrderLoader,
+    this.initialWorkCity,
+    this.workCityUpdater,
+    this.workCitiesLoader,
   });
 
   final OrderServiceType serviceType;
@@ -43,6 +51,9 @@ class DriverScreen extends StatefulWidget {
   final OrderOfferService? orderOfferService;
   final Future<List<Map<String, dynamic>>> Function()? availableOrdersLoader;
   final Future<Map<String, dynamic>?> Function()? activeOrderLoader;
+  final City? initialWorkCity;
+  final Future<String> Function(String cityId)? workCityUpdater;
+  final Future<List<City>> Function()? workCitiesLoader;
 
   @override
   State<DriverScreen> createState() => _DriverScreenState();
@@ -55,6 +66,8 @@ class _DriverScreenState extends State<DriverScreen>
   final Map<String, Stream<DriverOffer?>> _ownOfferStreams = {};
   bool _isOnline = false;
   bool _isUpdatingAvailability = false;
+  City? _workCity;
+  bool _isUpdatingWorkCity = false;
   late DriverOrdersPollController<Map<String, dynamic>?> _activeOrders;
   late DriverOrdersPollController<List<Map<String, dynamic>>> _availableOrders;
   TulparApiClient? _ordersApi;
@@ -74,12 +87,74 @@ class _DriverScreenState extends State<DriverScreen>
   void initState() {
     super.initState();
     _currentUserId = widget.userId ?? AppIdentityService().currentUserId ?? '';
+    _workCity = widget.initialWorkCity;
     WidgetsBinding.instance.addObserver(this);
     _appIsActive =
         WidgetsBinding.instance.lifecycleState == null ||
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     _newOrderTracker.setActive(_appIsActive);
     _initializeOrderStreams();
+    if (_workCity == null &&
+        !widget.serviceType.isIntercity &&
+        widget.availableOrdersLoader == null &&
+        widget.availableOrdersStream == null) {
+      unawaited(_loadWorkCity());
+    }
+  }
+
+  Future<void> _loadWorkCity() async {
+    final api = TulparApiClient();
+    try {
+      final profile = await api.getCurrentDriverProfile();
+      if (!mounted) return;
+      final cityId = profile?['workCityId']?.toString();
+      setState(
+        () => _workCity = availableCities
+            .where((city) => city.id == cityId)
+            .firstOrNull,
+      );
+    } catch (_) {
+      // The order list independently reports its own server error.
+    } finally {
+      api.close();
+    }
+  }
+
+  Future<void> _chooseWorkCity() async {
+    if (_isUpdatingWorkCity || _workCity == null) return;
+    final chosen = await showCitySelectionModal(
+      context,
+      currentCityId: _workCity!.id,
+      citiesLoader: widget.workCitiesLoader,
+    );
+    if (chosen == null || chosen.id == _workCity!.id || !mounted) return;
+    setState(() => _isUpdatingWorkCity = true);
+    try {
+      await (widget.workCityUpdater?.call(chosen.id) ??
+          _api.updateDriverWorkCity(chosen.id));
+      if (!mounted) return;
+      _availableOrders.dispose();
+      _availableOrders = _createAvailableOrdersPoll();
+      setState(() {
+        _workCity = chosen;
+        _isOnline = false;
+      });
+      _newOrderTracker.reset();
+      _syncPollingLifecycle();
+      await _availableOrders.refresh();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              AppLocalizations.of(context).driverWorkCityChangeFailed,
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isUpdatingWorkCity = false);
+    }
   }
 
   @override
@@ -184,7 +259,7 @@ class _DriverScreenState extends State<DriverScreen>
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        ).showSnackBar(SnackBar(content: Text(_messageForLoadError(error))));
       }
     } finally {
       if (mounted) setState(() => _isUpdatingAvailability = false);
@@ -221,8 +296,12 @@ class _DriverScreenState extends State<DriverScreen>
         )
         .map((o) => OrderServiceType.fromValue(o['serviceType']))
         .toSet();
+    final l10n = AppLocalizations.of(context);
     final message = newTypes
-        .map((type) => type.newDriverOrderMessage)
+        .map(
+          (type) =>
+              l10n.driverNewOrder(type.localizedTitle(l10n).toUpperCase()),
+        )
         .join('\n');
     _newOrderSoundScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -240,6 +319,7 @@ class _DriverScreenState extends State<DriverScreen>
     OrderServiceType serviceType,
   ) async {
     final messenger = ScaffoldMessenger.of(context);
+    final l10n = AppLocalizations.of(context);
 
     try {
       await OrderWorkflowService().acceptOrder(orderId);
@@ -247,18 +327,14 @@ class _DriverScreenState extends State<DriverScreen>
       messenger.showSnackBar(
         SnackBar(
           content: Text(switch (serviceType) {
-            OrderServiceType.delivery =>
-              'Доставка принята! Направляйтесь за посылкой.',
-            OrderServiceType.intercity =>
-              'Междугородняя поездка принята! Направляйтесь к пассажиру.',
-            OrderServiceType.city => 'Заказ принят! Направляйтесь к клиенту.',
+            OrderServiceType.delivery => l10n.driverAcceptDelivery,
+            OrderServiceType.intercity => l10n.driverAcceptIntercity,
+            OrderServiceType.city => l10n.driverAcceptCity,
           }),
         ),
       );
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('Ошибка при принятии заказа: $e')),
-      );
+      messenger.showSnackBar(SnackBar(content: Text(l10n.driverAcceptFailed)));
     }
   }
 
@@ -276,8 +352,8 @@ class _DriverScreenState extends State<DriverScreen>
         return AlertDialog(
           title: Text(
             existingOffer == null
-                ? '\u041f\u0440\u0435\u0434\u043b\u043e\u0436\u0438\u0442\u044c \u0446\u0435\u043d\u0443'
-                : '\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c \u043f\u0440\u0435\u0434\u043b\u043e\u0436\u0435\u043d\u0438\u0435',
+                ? AppLocalizations.of(dialogContext).driverProposePrice
+                : AppLocalizations.of(dialogContext).driverChangeOffer,
           ),
           content: SingleChildScrollView(
             child: Column(
@@ -285,16 +361,19 @@ class _DriverScreenState extends State<DriverScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '\u0426\u0435\u043d\u0430 \u043f\u0430\u0441\u0441\u0430\u0436\u0438\u0440\u0430: $passengerPrice \u20b8',
+                  AppLocalizations.of(
+                    dialogContext,
+                  ).driverPassengerPrice(passengerPrice),
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
                   initialValue: enteredPrice,
                   autofocus: true,
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText:
-                        '\u0412\u0430\u0448\u0430 \u0446\u0435\u043d\u0430, \u20b8',
+                  decoration: InputDecoration(
+                    labelText: AppLocalizations.of(
+                      dialogContext,
+                    ).driverYourPrice,
                     border: OutlineInputBorder(),
                   ),
                   onChanged: (value) {
@@ -310,7 +389,7 @@ class _DriverScreenState extends State<DriverScreen>
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('\u041e\u0442\u043c\u0435\u043d\u0430'),
+              child: Text(AppLocalizations.of(dialogContext).cancel),
             ),
             FilledButton(
               onPressed: () {
@@ -318,9 +397,11 @@ class _DriverScreenState extends State<DriverScreen>
 
                 if (value == null) {
                   ScaffoldMessenger.of(dialogContext).showSnackBar(
-                    const SnackBar(
+                    SnackBar(
                       content: Text(
-                        '\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0446\u0435\u043b\u0443\u044e \u0441\u0443\u043c\u043c\u0443.',
+                        AppLocalizations.of(
+                          dialogContext,
+                        ).driverEnterWholeAmount,
                       ),
                     ),
                   );
@@ -333,15 +414,23 @@ class _DriverScreenState extends State<DriverScreen>
                     passengerPrice: passengerPrice,
                   );
                   Navigator.pop(dialogContext, value);
-                } on OrderOfferException catch (error) {
-                  ScaffoldMessenger.of(
-                    dialogContext,
-                  ).showSnackBar(SnackBar(content: Text(error.message)));
+                } on OrderOfferException {
+                  ScaffoldMessenger.of(dialogContext).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        value <= passengerPrice
+                            ? AppLocalizations.of(
+                                dialogContext,
+                              ).driverOfferAbovePrice
+                            : AppLocalizations.of(
+                                dialogContext,
+                              ).driverOfferTooHigh,
+                      ),
+                    ),
+                  );
                 }
               },
-              child: const Text(
-                '\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c',
-              ),
+              child: Text(AppLocalizations.of(dialogContext).driverSendOffer),
             ),
           ],
         );
@@ -357,17 +446,15 @@ class _DriverScreenState extends State<DriverScreen>
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            '\u041f\u0440\u0435\u0434\u043b\u043e\u0436\u0435\u043d\u0438\u0435 $price \u20b8 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u043e \u043f\u0430\u0441\u0441\u0430\u0436\u0438\u0440\u0443.',
-          ),
+          content: Text(AppLocalizations.of(context).driverOfferSent(price)),
         ),
       );
     } catch (error) {
       if (!mounted) return;
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.toString())));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(AppLocalizations.of(context).driverOfferFailed)),
+      );
     }
   }
 
@@ -396,8 +483,10 @@ class _DriverScreenState extends State<DriverScreen>
   @override
   Widget build(BuildContext context) {
     if (_currentUserId.isEmpty) {
-      return const Scaffold(
-        body: Center(child: Text('Ошибка: Водитель не авторизован')),
+      return Scaffold(
+        body: Center(
+          child: Text(AppLocalizations.of(context).driverNotAuthenticated),
+        ),
       );
     }
 
@@ -440,15 +529,31 @@ class _DriverScreenState extends State<DriverScreen>
       appBar: AppBar(
         title: Text(
           widget.serviceType.isIntercity
-              ? widget.serviceType.driverSectionTitle
-              : 'Такси и доставка',
+              ? widget.serviceType.localizedDriverSectionTitle(
+                  AppLocalizations.of(context),
+                )
+              : AppLocalizations.of(context).taxiAndDelivery,
         ),
         backgroundColor: const Color(0xFF1E1E1E),
         foregroundColor: Colors.amber,
         actions: [
+          if (!widget.serviceType.isIntercity)
+            TextButton.icon(
+              key: const Key('driver_work_city_selector'),
+              onPressed: _workCity == null || _isUpdatingWorkCity || _isOnline
+                  ? null
+                  : _chooseWorkCity,
+              icon: const Icon(Icons.location_city),
+              label: Text(
+                _workCity?.localizedName(
+                      Localizations.localeOf(context).languageCode,
+                    ) ??
+                    AppLocalizations.of(context).driverWorkCity,
+              ),
+            ),
           Row(
             children: [
-              const Text('На линии'),
+              Text(AppLocalizations.of(context).driverOnline),
               Switch(
                 key: const Key('driver_online_switch'),
                 value: _isOnline,
@@ -467,13 +572,13 @@ class _DriverScreenState extends State<DriverScreen>
           if (activeStreamError != null)
             MaterialBanner(
               key: const Key('driver_active_order_error'),
-              content: const Text(
-                'Не удалось проверить текущий заказ. Проверка повторяется автоматически.',
+              content: Text(
+                AppLocalizations.of(context).driverActiveCheckFailed,
               ),
               actions: [
                 TextButton(
                   onPressed: _retryActiveOrders,
-                  child: const Text('Повторить'),
+                  child: Text(AppLocalizations.of(context).retry),
                 ),
               ],
             ),
@@ -484,7 +589,7 @@ class _DriverScreenState extends State<DriverScreen>
               actions: [
                 TextButton(
                   onPressed: _retryAvailableOrders,
-                  child: const Text('Повторить'),
+                  child: Text(AppLocalizations.of(context).retry),
                 ),
               ],
             ),
@@ -504,10 +609,13 @@ class _DriverScreenState extends State<DriverScreen>
 
                 if (!_availableOrders.hasData ||
                     _availableOrders.value!.isEmpty) {
-                  return const Center(
+                  return Center(
                     child: Text(
-                      'Пока нет доступных заказов',
-                      style: TextStyle(color: Colors.white54, fontSize: 16),
+                      AppLocalizations.of(context).driverNoOrders,
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 16,
+                      ),
                     ),
                   );
                 }
@@ -548,9 +656,11 @@ class _DriverScreenState extends State<DriverScreen>
                           children: [
                             Chip(
                               label: Text(
-                                OrderServiceType.fromValue(
-                                  data['serviceType'],
-                                ).driverOrderLabel,
+                                OrderServiceType.fromValue(data['serviceType'])
+                                    .localizedTitle(
+                                      AppLocalizations.of(context),
+                                    )
+                                    .toUpperCase(),
                               ),
                               avatar: Icon(
                                 OrderServiceType.fromValue(
@@ -568,7 +678,8 @@ class _DriverScreenState extends State<DriverScreen>
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(
-                                  data['passengerName'] ?? 'Пассажир',
+                                  data['passengerName'] ??
+                                      AppLocalizations.of(context).passenger,
                                   style: const TextStyle(
                                     color: Colors.white,
                                     fontWeight: FontWeight.bold,
@@ -586,54 +697,23 @@ class _DriverScreenState extends State<DriverScreen>
                               ],
                             ),
                             const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                const Icon(
-                                  Icons.my_location,
-                                  color: Colors.green,
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    data['fromAddress'] ?? '',
-                                    style: const TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                const Icon(
-                                  Icons.location_on,
-                                  color: Colors.red,
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    data['toAddress'] ?? '',
-                                    style: const TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                ),
-                              ],
+                            OrderStopsView(
+                              orderData: data,
+                              textColor: Colors.white70,
                             ),
                             if (DeliveryDetailsView.isDelivery(data)) ...[
                               const SizedBox(height: 12),
-                              DeliveryDetailsView(orderData: data),
+                              DeliveryDetailsView(
+                                orderData: data,
+                                onDarkCard: true,
+                              ),
                             ],
                             if (IntercityDetailsView.isIntercity(data)) ...[
                               const SizedBox(height: 12),
                               IntercityDetailsView(
                                 orderData: data,
                                 showRouteAndPrice: false,
+                                onDarkCard: true,
                               ),
                             ],
                             const Divider(color: Colors.white24, height: 24),
@@ -646,7 +726,11 @@ class _DriverScreenState extends State<DriverScreen>
                                 ),
                                 const SizedBox(width: 6),
                                 Text(
-                                  '${distanceKm.toStringAsFixed(1)} км',
+                                  AppLocalizations.of(
+                                    context,
+                                  ).distanceKilometers(
+                                    distanceKm.toStringAsFixed(1),
+                                  ),
                                   style: const TextStyle(
                                     color: Colors.amber,
                                     fontWeight: FontWeight.bold,
@@ -656,9 +740,13 @@ class _DriverScreenState extends State<DriverScreen>
                                 if (distanceKm > 0) ...[
                                   const Spacer(),
                                   Text(
-                                    '${(passengerPrice / distanceKm).round()} ₸/км',
+                                    AppLocalizations.of(
+                                      context,
+                                    ).pricePerKilometer(
+                                      (passengerPrice / distanceKm).round(),
+                                    ),
                                     style: const TextStyle(
-                                      color: Colors.white54,
+                                      color: Colors.white70,
                                     ),
                                   ),
                                 ],
@@ -672,7 +760,7 @@ class _DriverScreenState extends State<DriverScreen>
                               ),
                               passengerName:
                                   data['passengerName']?.toString() ??
-                                  'Пассажир',
+                                  AppLocalizations.of(context).passenger,
                               passengerPrice: passengerPrice,
                             ),
                           ],
@@ -705,7 +793,9 @@ class _DriverScreenState extends State<DriverScreen>
           children: [
             if (pendingOffer != null) ...[
               Text(
-                'Вы предложили ${pendingOffer.price} ₸',
+                AppLocalizations.of(
+                  context,
+                ).driverYouOffered(pendingOffer.price),
                 style: const TextStyle(
                   color: Colors.white70,
                   fontWeight: FontWeight.w600,
@@ -719,8 +809,9 @@ class _DriverScreenState extends State<DriverScreen>
               alignment: WrapAlignment.end,
               children: [
                 IconButton(
-                  tooltip: 'Чат',
-                  icon: const Icon(Icons.chat, color: Colors.amber),
+                  tooltip: AppLocalizations.of(context).chat,
+                  color: Colors.white,
+                  icon: ChatUnreadBadge(orderId: orderId),
                   onPressed: () {
                     Navigator.push(
                       context,
@@ -745,7 +836,9 @@ class _DriverScreenState extends State<DriverScreen>
                     foregroundColor: Colors.amber,
                   ),
                   child: Text(
-                    pendingOffer == null ? 'Предложить цену' : 'Изменить цену',
+                    pendingOffer == null
+                        ? AppLocalizations.of(context).driverProposePrice
+                        : AppLocalizations.of(context).driverChangePrice,
                   ),
                 ),
                 ElevatedButton(
@@ -756,7 +849,11 @@ class _DriverScreenState extends State<DriverScreen>
                     backgroundColor: Colors.amber,
                     foregroundColor: Colors.black,
                   ),
-                  child: Text('Принять за $passengerPrice ₸'),
+                  child: Text(
+                    AppLocalizations.of(
+                      context,
+                    ).driverAcceptForPrice(passengerPrice),
+                  ),
                 ),
               ],
             ),
@@ -768,13 +865,14 @@ class _DriverScreenState extends State<DriverScreen>
 
   String _messageForLoadError(Object? error) {
     return switch (error) {
-      FirebaseException(code: 'permission-denied') =>
-        'Нет доступа к заказам. Профиль водителя должен быть одобрен.',
-      FirebaseException(code: 'failed-precondition') =>
-        'Запрос заказов требует настройки Firestore. Проверьте технические логи.',
-      TimeoutException() =>
-        'Не удалось обновить доступные заказы: сервер не ответил вовремя. Повторяем автоматически.',
-      _ => 'Не удалось обновить доступные заказы. Повторяем автоматически.',
+      FirebaseException(code: 'permission-denied') => AppLocalizations.of(
+        context,
+      ).driverOrdersForbidden,
+      FirebaseException(code: 'failed-precondition') => AppLocalizations.of(
+        context,
+      ).driverOrdersConfigFailed,
+      TimeoutException() => AppLocalizations.of(context).driverOrdersTimeout,
+      _ => AppLocalizations.of(context).driverOrdersLoadFailed,
     };
   }
 }

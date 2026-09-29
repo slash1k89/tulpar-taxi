@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_routes.dart';
+import '../l10n/generated/app_localizations.dart';
 import '../firebase_options.dart';
 import '../models/order_service_type.dart';
 import '../screens/chat/chat_screen.dart';
@@ -16,12 +17,17 @@ import '../screens/intercity/intercity_ride_details_screen.dart';
 import '../screens/driver/intercity_driver_ride_details_screen.dart';
 import '../screens/map/order_tracking_screen.dart';
 import 'driver_approaching_notification.dart';
+import 'foreground_push_copy.dart';
 import 'intercity_ride_service.dart';
 import 'tulpar_api_client.dart';
 import 'tulpar_auth_session.dart';
 import 'push_token_registration.dart';
 import 'navigation_audio_service.dart';
 import 'navigation_voice_service.dart';
+import 'voice_asset_service.dart';
+import 'locale_controller.dart';
+import 'chat_notification_service.dart';
+import '../widgets/chat_unread_badge.dart';
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -29,6 +35,14 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   pushDiagnostic(
     'background message type=${message.data['type']} orderId=${message.data['orderId']}',
   );
+}
+
+bool _backgroundHandlerRegistered = false;
+
+void registerFirebaseMessagingBackgroundHandler() {
+  if (_backgroundHandlerRegistered) return;
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  _backgroundHandlerRegistered = true;
 }
 
 class PushNotificationService with WidgetsBindingObserver {
@@ -75,7 +89,11 @@ class PushNotificationService with WidgetsBindingObserver {
   late GlobalKey<ScaffoldMessengerState> _messengerKey;
   final List<RemoteMessage> _pendingForeground = [];
   Timer? _bannerRetry;
+  Timer? _bannerDismiss;
+  int _bannerGeneration = 0;
+  final Set<String> _shownForegroundIds = {};
   final Set<String> _shownApproaching = {};
+  final Set<String> _shownIntercityEvents = {};
   bool _initialized = false;
   bool _disposed = false;
   bool _usingTulparSession = false;
@@ -116,10 +134,7 @@ class PushNotificationService with WidgetsBindingObserver {
           },
     );
     _initialized = true;
-    (backgroundRegistrar ??
-        () => FirebaseMessaging.onBackgroundMessage(
-          firebaseMessagingBackgroundHandler,
-        ))();
+    (backgroundRegistrar ?? registerFirebaseMessagingBackgroundHandler)();
     _observedUserId = _currentPushUserId();
     // Attach before any permission, getToken, or backend network awaits.
     _foregroundSubscription =
@@ -131,8 +146,8 @@ class PushNotificationService with WidgetsBindingObserver {
           (message) => _openFromMessage(_navigatorKey, message),
         );
     _tokenSubscription = _messaging.onTokenRefresh.listen(
-      (token) {
-        pushDiagnostic('onTokenRefresh suffix=${pushTokenSuffix(token)}');
+      (_) {
+        pushDiagnostic('onTokenRefresh received');
         unawaited(_tokens.sync());
       },
       onError: (Object e) {
@@ -179,11 +194,51 @@ class PushNotificationService with WidgetsBindingObserver {
 
   void _receiveForeground(RemoteMessage message) {
     if (_disposed) return;
+    final eventId = message.messageId ?? message.data['messageId']?.toString();
+    if (eventId != null && eventId.isNotEmpty) {
+      if (!_shownForegroundIds.add(eventId)) return;
+      if (_shownForegroundIds.length > 256) {
+        _shownForegroundIds.remove(_shownForegroundIds.first);
+      }
+    }
     pushDiagnostic(
       'foreground message type=${message.data['type']} orderId=${message.data['orderId']}',
     );
     _pendingForeground.add(message);
     _flushForeground();
+  }
+
+  void _showForegroundBanner({
+    required String body,
+    String? actionLabel,
+    VoidCallback? onOpen,
+  }) {
+    final messenger = _messengerKey.currentState;
+    if (messenger == null || _disposed) return;
+    _bannerDismiss?.cancel();
+    final generation = ++_bannerGeneration;
+    messenger.removeCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 5),
+        content: Text(body),
+        action: actionLabel == null || onOpen == null
+            ? null
+            : SnackBarAction(
+                label: actionLabel,
+                onPressed: () {
+                  if (generation != _bannerGeneration) return;
+                  _bannerDismiss?.cancel();
+                  messenger.removeCurrentSnackBar();
+                  onOpen();
+                },
+              ),
+      ),
+    );
+    _bannerDismiss = Timer(const Duration(seconds: 5), () {
+      if (_disposed || generation != _bannerGeneration) return;
+      messenger.removeCurrentSnackBar();
+    });
   }
 
   void _flushForeground() {
@@ -217,6 +272,27 @@ class PushNotificationService with WidgetsBindingObserver {
     final messengerKey = _messengerKey;
     final eventType = message.data['type']?.toString();
     final orderId = message.data['orderId'];
+    final currentContext = navigatorKey.currentContext;
+    final currentLocale = currentContext == null
+        ? appLocaleController.effectiveLocale
+        : LocaleController.resolveLocale(
+            Localizations.localeOf(currentContext),
+          );
+    final l10n = lookupAppLocalizations(currentLocale);
+    if (eventType == 'chat_message' &&
+        orderId is String &&
+        orderId.isNotEmpty) {
+      final messageId =
+          message.data['messageId']?.toString() ?? message.messageId ?? '';
+      if (messageId.isNotEmpty) {
+        chatNotificationService.handlePush(
+          orderId: orderId,
+          messageId: messageId,
+        );
+      }
+      ChatUnreadBadge.refreshOrder(orderId);
+      if (chatNotificationService.isChatOpen(orderId)) return;
+    }
     if (isDriverApproachingPickup(eventType)) {
       if (orderId is! String ||
           orderId.isEmpty ||
@@ -233,24 +309,23 @@ class PushNotificationService with WidgetsBindingObserver {
         );
         return;
       }
-      messengerKey.currentState!.showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 7),
-          content: const Text(
-            '$driverApproachingPickupTitle\n$driverApproachingPickupBody',
-          ),
-          action: SnackBarAction(
-            label: 'Открыть',
-            onPressed: () => _openOrderTracking(navigatorKey, orderId),
-          ),
-        ),
+      _showForegroundBanner(
+        body:
+            '${l10n.pushDriverApproachingTitle}\n${l10n.pushDriverApproachingBody}',
+        actionLabel: l10n.pushOpen,
+        onOpen: () => _openOrderTracking(navigatorKey, orderId),
       );
       _shownApproaching.add(orderId);
       unawaited(
         _approachingAudio.play(
-          const NavigationAudioCue(
-            assetPaths: ['audio/navigation/order_new.mp3'],
-            fallbackText: 'Водитель подъезжает',
+          NavigationAudioCue(
+            assetPaths: [
+              voiceAsset(
+                'driver_approaching.mp3',
+                languageCode: currentLocale.languageCode,
+              ),
+            ],
+            fallbackText: l10n.pushDriverApproachingBody,
           ),
         ),
       );
@@ -260,28 +335,44 @@ class PushNotificationService with WidgetsBindingObserver {
       return;
     }
     if (isIntercityRidePushEvent(eventType)) {
+      final bookingId = message.data['bookingId']?.toString();
+      if (eventType == 'intercity_chat_message' &&
+          bookingId != null &&
+          chatNotificationService.isChatOpen(bookingId)) {
+        return;
+      }
+      final intercityEventKey = [
+        eventType ?? '',
+        message.data['bookingId']?.toString() ?? '',
+        message.data['rideId']?.toString() ?? '',
+        message.data['messageId']?.toString() ?? message.messageId ?? '',
+      ].join(':');
+      if (!_shownIntercityEvents.add(intercityEventKey)) {
+        pushDiagnostic('intercity event skipped: duplicate event=$eventType');
+        return;
+      }
       SystemSound.play(SystemSoundType.alert);
       final passengerTarget = intercityPassengerPushTarget(message.data);
       final driverTarget = intercityDriverPushTarget(message.data);
-      messengerKey.currentState?.showSnackBar(
-        SnackBar(
-          content: Text(
-            message.notification?.body ?? intercityRidePushBody(eventType),
-          ),
-          action:
-              passengerTarget == IntercityPassengerPushTarget.none &&
-                  driverTarget == IntercityDriverPushTarget.none
-              ? null
-              : SnackBarAction(
-                  label: 'Открыть',
-                  onPressed: () => _openIntercityTarget(
-                    navigatorKey,
-                    passengerTarget,
-                    driverTarget,
-                    message.data,
-                  ),
-                ),
-        ),
+      _showForegroundBanner(
+        body: localizedForegroundPushCopy(
+          l10n: l10n,
+          eventType: eventType,
+          fallbackBody: message.notification?.body,
+        ).body,
+        actionLabel:
+            passengerTarget == IntercityPassengerPushTarget.none &&
+                driverTarget == IntercityDriverPushTarget.none
+            ? null
+            : l10n.pushOpen,
+        onOpen: () => eventType == 'intercity_chat_message'
+            ? _openIntercityChat(navigatorKey, message.data)
+            : _openIntercityTarget(
+                navigatorKey,
+                passengerTarget,
+                driverTarget,
+                message.data,
+              ),
       );
       return;
     }
@@ -298,33 +389,62 @@ class PushNotificationService with WidgetsBindingObserver {
         if (nextRank != null) _latestOrderStatusRanks[orderId] = nextRank;
       }
 
-      messengerKey.currentState?.hideCurrentSnackBar();
+      _bannerDismiss?.cancel();
+      _bannerGeneration++;
+      messengerKey.currentState?.removeCurrentSnackBar();
       if (!shouldShowForegroundPushBanner(eventType)) return;
+      if (eventType == 'arrived' || eventType == 'driver_arrived') {
+        unawaited(
+          _approachingAudio.play(
+            NavigationAudioCue(
+              assetPaths: [
+                voiceAsset(
+                  'order_arrived.mp3',
+                  languageCode: currentLocale.languageCode,
+                ),
+              ],
+              fallbackText: l10n.pushDriverArrived,
+            ),
+          ),
+        );
+      }
+      if (eventType == 'cancelled' && message.data['serviceType'] == 'city') {
+        unawaited(
+          _approachingAudio.play(
+            NavigationAudioCue(
+              assetPaths: [
+                voiceAsset(
+                  'order_cancelled.mp3',
+                  languageCode: currentLocale.languageCode,
+                ),
+              ],
+              fallbackText: l10n.pushOrderCancelled,
+            ),
+          ),
+        );
+      }
     }
 
-    SystemSound.play(SystemSoundType.alert);
+    if (!(eventType == 'cancelled' && message.data['serviceType'] == 'city')) {
+      SystemSound.play(SystemSoundType.alert);
+    }
 
-    final body = passengerPushBody(
+    final copy = localizedForegroundPushCopy(
+      l10n: l10n,
       eventType: eventType,
       serviceType: message.data['serviceType'],
+      cancelledBy: message.data['cancelledBy'],
       fallbackBody: message.notification?.body,
-    );
-    final title = passengerPushTitle(
-      eventType: eventType,
       fallbackTitle: message.notification?.title,
     );
-    messengerKey.currentState?.showSnackBar(
-      SnackBar(
-        content: Text(title == null ? body : '$title\n$body'),
-        action: orderId is String
-            ? SnackBarAction(
-                label: 'Открыть',
-                onPressed: () => _opensOrderTracking(message)
-                    ? _openOrderTracking(navigatorKey, orderId)
-                    : _openChat(navigatorKey, orderId),
-              )
-            : null,
-      ),
+    _showForegroundBanner(
+      body: copy.title == null ? copy.body : '${copy.title}\n${copy.body}',
+      actionLabel: orderId is String ? l10n.pushOpen : null,
+      onOpen: orderId is String
+          ? () => _opensOrderTracking(message)
+                ? _openOrderTracking(navigatorKey, orderId)
+                : _openChat(navigatorKey, orderId)
+          : null,
     );
   }
 
@@ -333,7 +453,13 @@ class PushNotificationService with WidgetsBindingObserver {
     if (userId != _observedUserId) {
       _latestOrderStatusRanks.clear();
       _shownApproaching.clear();
+      _shownIntercityEvents.clear();
       _pendingForeground.clear();
+      _shownForegroundIds.clear();
+      final hadBanner = _bannerDismiss?.isActive == true;
+      _bannerDismiss?.cancel();
+      _bannerGeneration++;
+      if (hadBanner) _messengerKey.currentState?.removeCurrentSnackBar();
       _observedUserId = userId;
     }
     unawaited(_tokens.sync());
@@ -379,6 +505,10 @@ class PushNotificationService with WidgetsBindingObserver {
   ) {
     final eventType = message.data['type']?.toString();
     if (isIntercityRidePushEvent(eventType)) {
+      if (eventType == 'intercity_chat_message') {
+        _openIntercityChat(navigatorKey, message.data);
+        return;
+      }
       _openIntercityTarget(
         navigatorKey,
         intercityPassengerPushTarget(message.data),
@@ -401,15 +531,42 @@ class PushNotificationService with WidgetsBindingObserver {
     GlobalKey<NavigatorState> navigatorKey,
     String orderId,
   ) {
+    if (OrderTrackingScreen.isCurrentOrder(orderId)) return;
     navigatorKey.currentState?.push(
       MaterialPageRoute(builder: (_) => OrderTrackingScreen(orderId: orderId)),
     );
   }
 
   void _openChat(GlobalKey<NavigatorState> navigatorKey, String orderId) {
+    if (chatNotificationService.isChatOpen(orderId)) return;
     navigatorKey.currentState?.push(
       MaterialPageRoute(
-        builder: (_) => ChatScreen(orderId: orderId, peerName: 'Чат'),
+        builder: (_) => ChatScreen(
+          orderId: orderId,
+          peerName: lookupAppLocalizations(
+            appLocaleController.effectiveLocale,
+          ).pushNewMessage,
+        ),
+      ),
+    );
+  }
+
+  void _openIntercityChat(
+    GlobalKey<NavigatorState> navigatorKey,
+    Map<String, dynamic> data,
+  ) {
+    final bookingId = data['bookingId']?.toString() ?? '';
+    if (bookingId.isEmpty) return;
+    if (chatNotificationService.isChatOpen(bookingId)) return;
+    navigatorKey.currentState?.push(
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          orderId: bookingId,
+          peerName: lookupAppLocalizations(
+            appLocaleController.effectiveLocale,
+          ).pushIntercityChatMessage,
+          intercity: true,
+        ),
       ),
     );
   }
@@ -429,6 +586,7 @@ class PushNotificationService with WidgetsBindingObserver {
           navigator.pushNamed(AppRoutes.driverIntercityRides);
           return;
         }
+        if (IntercityDriverRideDetailsScreen.isCurrentRide(rideId)) return;
         navigator.push(
           MaterialPageRoute(
             builder: (_) => IntercityDriverRideDetailsScreen(
@@ -448,6 +606,7 @@ class PushNotificationService with WidgetsBindingObserver {
       case IntercityPassengerPushTarget.rideDetails:
         final rideId = data['rideId']?.toString() ?? '';
         if (rideId.isEmpty) return;
+        if (IntercityRideDetailsScreen.isCurrentRide(rideId)) return;
         navigator.push(
           MaterialPageRoute(
             builder: (_) => IntercityRideDetailsScreen(
@@ -469,6 +628,11 @@ class PushNotificationService with WidgetsBindingObserver {
     if (_disposed) return;
     _disposed = true;
     _bannerRetry?.cancel();
+    final hadBanner = _bannerDismiss?.isActive == true;
+    _bannerDismiss?.cancel();
+    if (_initialized && hadBanner) {
+      _messengerKey.currentState?.removeCurrentSnackBar();
+    }
     _pendingForeground.clear();
     WidgetsBinding.instance.removeObserver(this);
     if (_initialized) _tokens.dispose();
@@ -496,14 +660,18 @@ IntercityPassengerPushTarget intercityPassengerPushTarget(
         ? IntercityPassengerPushTarget.rideDetails
         : IntercityPassengerPushTarget.requests,
   'intercity_ride_cancelled' ||
-  'intercity_ride_departed' => IntercityPassengerPushTarget.bookings,
+  'intercity_ride_departed' ||
+  'intercity_trip_started' ||
+  'intercity_trip_completed' => IntercityPassengerPushTarget.bookings,
   _ => IntercityPassengerPushTarget.none,
 };
 
 IntercityDriverPushTarget intercityDriverPushTarget(
   Map<String, dynamic> data,
 ) => switch (data['type']?.toString()) {
-  'intercity_ride_booked' || 'intercity_booking_cancelled' =>
+  'intercity_ride_booked' ||
+  'intercity_booking_created' ||
+  'intercity_booking_cancelled' =>
     data['rideId']?.toString().isNotEmpty == true
         ? IntercityDriverPushTarget.rideDetails
         : IntercityDriverPushTarget.rides,
@@ -540,7 +708,7 @@ bool shouldShowForegroundPushBanner(Object? eventType) {
   if (isDriverApproachingPickup(eventType)) {
     return driverApproachingShowsForeground(eventType);
   }
-  return eventType != 'arrived' && eventType != 'driver_arrived';
+  return true;
 }
 
 String? passengerPushTitle({

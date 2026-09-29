@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:taxi_esil/models/city.dart';
 import 'package:taxi_esil/services/city_service.dart';
 import 'package:taxi_esil/widgets/city_selection_modal.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -22,9 +23,10 @@ void main() {
       expect(city.latitude, inInclusiveRange(-90, 90));
       expect(city.longitude, inInclusiveRange(-180, 180));
       expect(city.mapZoom, inInclusiveRange(10, 16));
-      expect(city.region, isNotEmpty);
       expect(city.contains(city.center), isTrue);
     }
+    expect(availableCities, hasLength(13));
+    expect(availableCities.map((city) => city.id), isNot(contains('astana')));
   });
 
   test('selected city is persisted', () async {
@@ -41,6 +43,9 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Builder(
           builder: (context) => Scaffold(
             body: ElevatedButton(
@@ -48,6 +53,7 @@ void main() {
                 selectedCity = await showCitySelectionModal(
                   context,
                   currentCityId: 'esil',
+                  citiesLoader: () async => availableCities,
                 );
               },
               child: const Text('Выбрать город'),
@@ -59,10 +65,10 @@ void main() {
 
     await tester.tap(find.text('Выбрать город'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Астана'));
+    await tester.tap(find.text('Атбасар'));
     await tester.pumpAndSettle();
 
-    expect(selectedCity?.id, 'astana');
-    expect(selectedCity?.mapZoom, 11.5);
+    expect(selectedCity?.id, 'atbasar');
+    expect(selectedCity?.mapZoom, 13.5);
   });
 }

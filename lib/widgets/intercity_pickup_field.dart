@@ -4,6 +4,7 @@ import '../models/intercity_pickup_draft.dart';
 import '../screens/map/destination_picker_screen.dart';
 import '../screens/map/intercity_place_picker_screens.dart';
 import '../services/geocoding_service.dart';
+import '../l10n/generated/app_localizations.dart';
 
 typedef IntercityPickupPicker =
     Future<IntercityPickupDraft?> Function(
@@ -59,14 +60,14 @@ class IntercityPickupField extends StatelessWidget {
       borderRadius: BorderRadius.circular(12),
       child: InputDecorator(
         decoration: InputDecoration(
-          labelText: 'Точка посадки',
+          labelText: AppLocalizations.of(context).intercityPickupPoint,
           prefixIcon: const Icon(Icons.my_location_outlined),
           suffixIcon: Icon(
             pickup == null ? Icons.chevron_right : Icons.edit_outlined,
           ),
         ),
         child: Text(
-          pickup?.address ?? 'Откуда вас забрать?',
+          pickup?.address ?? AppLocalizations.of(context).intercityPickupPrompt,
           key: const Key('intercity_pickup_address'),
           style: pickup == null
               ? TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)

@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import '/models/city.dart';
+import '/l10n/generated/app_localizations.dart';
 import '/models/address_suggestion.dart';
 import '/services/geocoding_service.dart';
 import '/services/map_point_address_resolver.dart';
@@ -67,14 +68,15 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
     super.initState();
     _addressResolver = widget.addressResolver ?? MapPointAddressResolver();
     _selectedPoint = widget.initialCenter;
-    _selectedAddress = widget.initialAddress?.trim().isNotEmpty == true
-        ? widget.initialAddress!.trim()
-        : 'Определение адреса...';
+    _selectedAddress = widget.initialAddress?.trim() ?? '';
     final hasResolvedInitialAddress =
+        _selectedAddress.isNotEmpty &&
         _selectedAddress != 'Определение адреса...' &&
         !_selectedAddress.startsWith('Точка на карте');
     if (!hasResolvedInitialAddress) {
-      unawaited(_selectPoint(widget.initialCenter));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_selectPoint(widget.initialCenter));
+      });
     }
   }
 
@@ -88,11 +90,12 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
   }
 
   Future<void> _selectPoint(LatLng point) async {
+    final l10n = AppLocalizations.of(context);
     final requestId = ++_reverseGeocodeRequestId;
     _validationRequestId++;
     setState(() {
       _selectedPoint = point;
-      _selectedAddress = 'Определение адреса...';
+      _selectedAddress = l10n.pickerResolvingAddress;
       _isResolvingAddress = true;
       _isValidatingPoint = false;
       _validationMessage = null;
@@ -104,27 +107,24 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
           .timeout(const Duration(seconds: 10));
       if (!mounted || requestId != _reverseGeocodeRequestId) return;
       setState(() {
-        _selectedAddress = AddressSuggestion.shortAddressFromDisplayName(
-          resolved.address,
-        );
+        _selectedAddress = resolved.address.startsWith('Точка на карте')
+            ? _coordinateFallback(point)
+            : AddressSuggestion.shortAddressFromDisplayName(resolved.address);
         if (resolved.address.startsWith('Точка на карте')) {
-          _validationMessage =
-              'Не удалось определить адрес. Координаты сохранены.';
+          _validationMessage = l10n.pickerAddressUnavailable;
         }
       });
     } on TimeoutException {
       if (!mounted || requestId != _reverseGeocodeRequestId) return;
       setState(() {
         _selectedAddress = _coordinateFallback(point);
-        _validationMessage =
-            'Сервис адресов не отвечает. Координаты сохранены.';
+        _validationMessage = l10n.pickerAddressTimeout;
       });
     } catch (_) {
       if (!mounted || requestId != _reverseGeocodeRequestId) return;
       setState(() {
         _selectedAddress = _coordinateFallback(point);
-        _validationMessage =
-            'Не удалось определить адрес. Координаты сохранены.';
+        _validationMessage = l10n.pickerAddressUnavailable;
       });
     } finally {
       if (mounted && requestId == _reverseGeocodeRequestId) {
@@ -134,8 +134,10 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
   }
 
   String _coordinateFallback(LatLng point) =>
-      'Точка на карте (${point.latitude.toStringAsFixed(3)}, '
-      '${point.longitude.toStringAsFixed(3)})';
+      AppLocalizations.of(context).pickerCoordinate(
+        point.latitude.toStringAsFixed(3),
+        point.longitude.toStringAsFixed(3),
+      );
 
   void _handleMapEvent(MapEvent event) {
     if (event is! MapEventMoveEnd) return;
@@ -154,6 +156,7 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
 
   Future<void> _confirmSelection() async {
     if (_isResolvingAddress || _isValidatingPoint) return;
+    final l10n = AppLocalizations.of(context);
     final requestId = ++_validationRequestId;
     final city = widget.restrictedCity;
     if (city != null) {
@@ -170,22 +173,20 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
         if (!mounted || requestId != _validationRequestId) return;
         if (!allowed) {
           setState(() {
-            _validationMessage = 'Выберите точку в городе ${city.name}.';
+            _validationMessage = l10n.pickerChooseInCity(city.name);
           });
           return;
         }
       } on TimeoutException {
         if (!mounted || requestId != _validationRequestId) return;
         setState(() {
-          _validationMessage =
-              'Не удалось проверить город. Проверьте сеть и повторите.';
+          _validationMessage = l10n.pickerCityCheckFailed;
         });
         return;
       } catch (_) {
         if (!mounted || requestId != _validationRequestId) return;
         setState(() {
-          _validationMessage =
-              'Не удалось проверить точку. Попробуйте ещё раз.';
+          _validationMessage = l10n.pickerPointCheckFailed;
         });
         return;
       } finally {
@@ -202,6 +203,7 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
 
   Future<void> _moveToCurrentLocation() async {
     if (_isLocating) return;
+    final l10n = AppLocalizations.of(context);
     final requestId = ++_locationRequestId;
     setState(() {
       _isLocating = true;
@@ -215,19 +217,17 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
         );
       } else {
         if (!await Geolocator.isLocationServiceEnabled()) {
-          throw const _LocationFailure('Включите геолокацию на телефоне.');
+          throw _LocationFailure(l10n.pickerEnableLocation);
         }
         var permission = await Geolocator.checkPermission();
         if (permission == LocationPermission.denied) {
           permission = await Geolocator.requestPermission();
         }
         if (permission == LocationPermission.denied) {
-          throw const _LocationFailure('Доступ к геолокации не разрешён.');
+          throw _LocationFailure(l10n.pickerLocationDenied);
         }
         if (permission == LocationPermission.deniedForever) {
-          throw const _LocationFailure(
-            'Разрешите геолокацию в настройках приложения.',
-          );
+          throw _LocationFailure(l10n.pickerLocationSettings);
         }
         final position = await Geolocator.getCurrentPosition(
           timeLimit: const Duration(seconds: 12),
@@ -236,10 +236,7 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
       }
     } on TimeoutException {
       if (mounted && requestId == _locationRequestId) {
-        setState(
-          () => _validationMessage =
-              'Не удалось быстро определить местоположение. Выберите точку вручную.',
-        );
+        setState(() => _validationMessage = l10n.pickerLocationSlow);
       }
       return;
     } on _LocationFailure catch (error) {
@@ -249,10 +246,7 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
       return;
     } catch (_) {
       if (mounted && requestId == _locationRequestId) {
-        setState(
-          () => _validationMessage =
-              'Не удалось определить местоположение. Выберите точку вручную.',
-        );
+        setState(() => _validationMessage = l10n.pickerLocationFailed);
       }
       return;
     } finally {
@@ -262,10 +256,7 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
     }
     if (!mounted || requestId != _locationRequestId) return;
     if (point == null) {
-      setState(
-        () => _validationMessage =
-            'Не удалось получить местоположение. Выберите точку вручную.',
-      );
+      setState(() => _validationMessage = l10n.pickerNoLocation);
       return;
     }
 
@@ -280,17 +271,14 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
                 .timeout(const Duration(seconds: 10)));
       } catch (_) {
         if (mounted && requestId == _locationRequestId) {
-          setState(
-            () => _validationMessage =
-                'Не удалось проверить город. Выберите точку вручную или повторите.',
-          );
+          setState(() => _validationMessage = l10n.pickerCityCheckManual);
         }
         return;
       }
       if (!mounted) return;
       if (!allowed) {
         setState(() {
-          _validationMessage = 'Выберите точку в городе ${city.name}.';
+          _validationMessage = l10n.pickerChooseInCity(city.name);
         });
         return;
       }
@@ -306,8 +294,8 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
       appBar: AppBar(
         title: Text(
           widget.purpose == MapPointPurpose.pickup
-              ? 'Точка отправления'
-              : 'Точка назначения',
+              ? AppLocalizations.of(context).pickerPickupTitle
+              : AppLocalizations.of(context).pickerDestinationTitle,
         ),
       ),
       body: Stack(
@@ -345,7 +333,7 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
             child: FloatingActionButton.small(
               key: const Key('map_picker_gps_button'),
               heroTag: 'map-picker-gps',
-              tooltip: 'Моё местоположение',
+              tooltip: AppLocalizations.of(context).pickerMyLocation,
               onPressed: _isLocating ? null : _moveToCurrentLocation,
               child: _isLocating
                   ? const SizedBox.square(
@@ -393,7 +381,11 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
                             ),
                           Expanded(
                             child: Text(
-                              _selectedAddress,
+                              _selectedAddress.isEmpty
+                                  ? AppLocalizations.of(
+                                      context,
+                                    ).pickerResolvingAddress
+                                  : _selectedAddress,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -417,8 +409,8 @@ class _MapPointPickerScreenState extends State<MapPointPickerScreen> {
                             : _confirmSelection,
                         child: Text(
                           _isValidatingPoint
-                              ? 'Проверка...'
-                              : 'Выбрать эту точку',
+                              ? AppLocalizations.of(context).pickerChecking
+                              : AppLocalizations.of(context).pickerChoosePoint,
                         ),
                       ),
                     ],

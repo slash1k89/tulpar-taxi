@@ -1,6 +1,6 @@
 const DEFAULT_API_BASE = 'https://api.mobizon.kz/service';
 const DEFAULT_TIMEOUT_MS = 8000;
-const DEFAULT_TEMPLATE = 'Код TULPAR: {code}. Никому не сообщайте этот код.';
+const DEFAULT_TEMPLATE = 'Код MEKEN: {code}. Никому не сообщайте этот код.';
 
 export class MobizonSmsError extends Error {
   constructor(category) {

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:taxi_esil/widgets/tulpar_map_visuals.dart';
+import 'package:taxi_esil/l10n/generated/app_localizations.dart';
 
 void main() {
   test('route uses the shared high-contrast stroke and outline', () {
@@ -33,7 +34,10 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      const MaterialApp(
+      MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: SizedBox(
             width: 320,
@@ -69,7 +73,12 @@ void main() {
     'vehicle applies a valid heading and ignores unavailable values',
     (tester) async {
       await tester.pumpWidget(
-        const MaterialApp(home: TulparVehicleMarker(headingDegrees: 90)),
+        MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+          home: const TulparVehicleMarker(headingDegrees: 90),
+        ),
       );
       final transform = tester.widget<Transform>(find.byType(Transform));
       expect(
@@ -78,7 +87,12 @@ void main() {
       );
 
       await tester.pumpWidget(
-        const MaterialApp(home: TulparVehicleMarker(headingDegrees: -1)),
+        MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+          home: const TulparVehicleMarker(headingDegrees: -1),
+        ),
       );
       expect(find.byType(Transform), findsNothing);
     },
@@ -88,7 +102,10 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      const MaterialApp(
+      MaterialApp(
+        locale: const Locale('ru'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(body: Center(child: TulparSelectionPin())),
       ),
     );

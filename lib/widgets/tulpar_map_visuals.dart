@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import '../l10n/generated/app_localizations.dart';
 
 enum TulparMapEndpoint { pickup, destination }
 
@@ -43,6 +44,22 @@ abstract final class TulparMapVisuals {
     child: TulparEndpointMarker(endpoint: endpoint),
   );
 
+  static Marker stopMarker({
+    required LatLng point,
+    required int number,
+    bool reached = false,
+  }) => Marker(
+    key: Key('route_stop_marker_$number'),
+    point: point,
+    width: 34,
+    height: 34,
+    rotate: true,
+    child: CircleAvatar(
+      backgroundColor: reached ? Colors.grey : Colors.orange,
+      child: Text('$number', style: const TextStyle(color: Colors.white)),
+    ),
+  );
+
   static Marker userLocationMarker({Key? key, required LatLng point}) => Marker(
     key: key,
     point: point,
@@ -67,7 +84,7 @@ class TulparSelectionPin extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Semantics(
-    label: 'Выбранная точка',
+    label: AppLocalizations.of(context).mapSelectedPoint,
     child: Transform.translate(
       key: const Key('map_selection_pin_anchor'),
       offset: const Offset(0, -TulparMapVisuals.selectionPinSize / 2),
@@ -135,7 +152,9 @@ class TulparEndpointMarker extends StatelessWidget {
         ? TulparMapVisuals.pickupColor
         : TulparMapVisuals.destinationColor;
     return Semantics(
-      label: isPickup ? 'Точка подачи' : 'Точка назначения',
+      label: isPickup
+          ? AppLocalizations.of(context).mapPickupMarker
+          : AppLocalizations.of(context).mapDestinationMarker,
       child: SizedBox.square(
         dimension: TulparMapVisuals.endpointMarkerSize,
         child: DecoratedBox(
@@ -169,7 +188,7 @@ class TulparUserLocationMarker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Semantics(
-    label: 'Ваше местоположение',
+    label: AppLocalizations.of(context).mapUserMarker,
     child: Stack(
       alignment: Alignment.center,
       children: [
@@ -218,7 +237,9 @@ class TulparVehicleMarker extends StatelessWidget {
   Widget build(BuildContext context) {
     final heading = headingDegrees;
     final marker = Semantics(
-      label: isDelivery ? 'Курьер на карте' : 'Автомобиль на карте',
+      label: isDelivery
+          ? AppLocalizations.of(context).mapCourierMarker
+          : AppLocalizations.of(context).mapVehicleMarker,
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: Colors.white,

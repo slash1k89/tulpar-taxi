@@ -5,6 +5,9 @@ class AddressSuggestion {
   final String? road;
   final String? houseNumber;
   final String? locality;
+  final String? kind;
+
+  bool get isStreetOnly => kind == 'street';
 
   AddressSuggestion({
     required this.displayName,
@@ -13,6 +16,7 @@ class AddressSuggestion {
     this.road,
     this.houseNumber,
     this.locality,
+    this.kind,
   });
 
   String get shortAddress {
@@ -83,6 +87,7 @@ class AddressSuggestion {
       road: road,
       houseNumber: houseNumber,
       locality: locality,
+      kind: json['kind']?.toString(),
     );
   }
 
